@@ -22,6 +22,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_boolean('save_checkpoints', False, '')
 flags.DEFINE_boolean('visualize', False, '')
 flags.DEFINE_boolean('profile', False, '')
+flags.DEFINE_integer('step_limit', 0, '', lower_bound=0)
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
 
@@ -139,10 +140,10 @@ def build_loss(inputs, outputs, feature_spec, palette):
 
 
 @gin.configurable
-def main(args, learning_rate=0.0001):
+def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16):
     output_dir = path.join('runs', time.strftime('%Y%m%d-%H%M%S', time.localtime()))
 
-    agent_interface_format = parse_agent_interface_format(feature_screen=16, feature_minimap=16)
+    agent_interface_format = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
     env_spec = environment_spec(Features(agent_interface_format=agent_interface_format))
 
     inputs = [Input(shape=s.shape, name='{}_input'.format(s.name)) for s in env_spec.spaces]
@@ -189,14 +190,17 @@ def main(args, learning_rate=0.0001):
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         hooks = [gin.tf.GinConfigSaverHook(output_dir)]
+        if FLAGS.step_limit:
+            hooks.append(tf.train.StopAtStepHook(last_step=FLAGS.step_limit))
         if FLAGS.profile:
-            hooks.append(tf.train.ProfilerHook(save_secs=600, output_dir=output_dir))
+            hooks.append(tf.train.ProfilerHook(save_secs=60, output_dir=output_dir))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
+                                               log_step_count_steps=1000,
                                                save_checkpoint_secs=3600 if FLAGS.save_checkpoints else None) as sess:
-            while True:
+            while not sess.should_stop():
                 obs = env.reset()
 
-                while True:
+                while not sess.should_stop():
                     action = np.random.choice(obs[0].observation.available_actions)
                     args = [[np.random.randint(0, size) for size in arg.sizes] for arg in
                             env_spec.action_spec.functions[action].args]

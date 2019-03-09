@@ -2,7 +2,7 @@ import time
 from os import path
 from collections import namedtuple
 import itertools
-from absl import app
+from absl import app, flags
 import numpy as np
 import gin
 import gin.tf
@@ -17,6 +17,11 @@ from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MI
 from pysc2.env.environment import StepType
 from pysc2.env.sc2_env import SC2Env, Agent, Bot, Race, Difficulty
 
+FLAGS = flags.FLAGS
+
+flags.DEFINE_boolean('save_checkpoints', False, '')
+flags.DEFINE_boolean('visualize', False, '')
+flags.DEFINE_boolean('profile', False, '')
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
 
@@ -85,7 +90,7 @@ def output_block(state, space_desc, activation='elu'):
 
 
 @gin.configurable
-def build_model(features, space_descs, dense_layer_size=512, activation='elu'):
+def build_model(features, space_descs, dense_layer_size=(512,), activation='elu'):
     with tf.name_scope('model'):
         with tf.name_scope('embed_categorical'):
             features = [embed_categorical(features[s.index], s) for s in space_descs]
@@ -96,7 +101,9 @@ def build_model(features, space_descs, dense_layer_size=512, activation='elu'):
                 features = [Flatten()(f) for f in features]
                 features = Concatenate(name='concatenate_features')(features)
 
-            dense = Dense(dense_layer_size, activation=activation)(features)
+            dense = features
+            for i, size in enumerate(dense_layer_size):
+                dense = Dense(size, activation=activation, name='state_dense_{}'.format(i))(dense)
 
             tf.summary.scalar('dense_zero_fraction', tf.nn.zero_fraction(dense))
             tf.summary.histogram('dense_output', dense)
@@ -104,21 +111,29 @@ def build_model(features, space_descs, dense_layer_size=512, activation='elu'):
         with tf.name_scope('output'):
             outputs = [output_block(dense, s) for s in space_descs]
 
-
     return outputs
 
 
-def build_loss(inputs, outputs, feature_spec):
+def build_loss(inputs, outputs, feature_spec, palette):
     losses = []
     for truth, prediction, spec in zip(inputs, outputs, feature_spec):
         if spec.type == FeatureType.CATEGORICAL:
             truth = tf.transpose(truth, (0, 2, 3, 1))
             prediction = tf.transpose(prediction, (0, 2, 3, 1))
             losses.append(tf.losses.softmax_cross_entropy(truth, prediction))
+
+            summary_image = tf.argmax(tf.concat([truth, prediction], 2), 3)
+            summary_image = tf.gather(palette[spec.index], summary_image)
+            tf.summary.image(spec.name, summary_image)
         else:
             losses.append(tf.losses.mean_squared_error(truth, prediction))
 
-        tf.summary.scalar('loss_{}'.format(spec.name), losses[-1])
+            summary_image = tf.concat([truth, prediction], 3)
+            tf.summary.image(spec.name, tf.transpose(summary_image, (0, 2, 3, 1)))
+            tf.summary.histogram(spec.name + '_truth_hist', truth)
+            tf.summary.histogram(spec.name + '_prediction_hist', prediction)
+
+        tf.summary.scalar(spec.name, losses[-1])
 
     return tf.reduce_mean(tf.stack(losses))
 
@@ -138,11 +153,20 @@ def main(args, learning_rate=0.0001):
     model = Model(inputs=inputs, outputs=list(itertools.chain.from_iterable(outputs)))
     model.summary()
 
+    feat_palettes = [[None] * len(s.features) for s in env_spec.spaces]
+    for s in env_spec.spaces:
+        for f in s.features:
+            palette = f.palette
+            if len(palette) < f.scale:
+                palette = np.append(f.palette, [[255, 0, 255] * (f.scale - len(f.palette))], axis=0)
+            feat_palettes[s.index][f.index] = tf.constant(palette, dtype=tf.uint8,
+                                                          name='{}_{}_palette'.format(s.name, f.name))
+
     with tf.name_scope('loss'):
         losses = []
         for s in env_spec.spaces:
             with tf.name_scope(s.name):
-                loss = build_loss(features[s.index], outputs[s.index], s.features)
+                loss = build_loss(features[s.index], outputs[s.index], s.features, feat_palettes[s.index])
                 losses.append(loss)
                 tf.summary.scalar('loss', loss)
 
@@ -159,11 +183,16 @@ def main(args, learning_rate=0.0001):
     env = SC2Env(map_name='Simple64', agent_interface_format=agent_interface_format, players=[
         Agent(Race.protoss),
         Bot(Race.protoss, Difficulty.easy)
-    ], visualize=True)
+    ], visualize=FLAGS.visualize)
 
     try:
-        config_saver = gin.tf.GinConfigSaverHook(output_dir)
-        with tf.train.MonitoredTrainingSession(hooks=[config_saver], checkpoint_dir=output_dir) as sess:
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        hooks = [gin.tf.GinConfigSaverHook(output_dir)]
+        if FLAGS.profile:
+            hooks.append(tf.train.ProfilerHook(save_secs=600, output_dir=output_dir))
+        with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
+                                               save_checkpoint_secs=3600 if FLAGS.save_checkpoints else None) as sess:
             while True:
                 obs = env.reset()
 

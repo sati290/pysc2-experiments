@@ -62,13 +62,16 @@ def embedding_dims_for_feature(feature_spec):
 
 
 def embed_categorical(features, space):
-    return [
-        Conv2D(embedding_dims_for_feature(f), 1, data_format='channels_first',
-               name='{}_{}_conv_categorical'.format(space.name, f.name))(features[f.index])
-        if f.type == FeatureType.CATEGORICAL
-        else features[f.index]
-        for f in space.features
-    ]
+    output = features.copy()
+    for f in filter(lambda x: x.type == FeatureType.CATEGORICAL, space.features):
+        conv = Conv2D(embedding_dims_for_feature(f), 1, data_format='channels_first',
+                      name='{}_{}_conv_categorical'.format(space.name, f.name))
+        output[f.index] = conv(features[f.index])
+
+        tf.summary.histogram('{}_{}_conv_out'.format(space.name, f.name), output[f.index])
+        tf.summary.histogram('{}_{}_conv_kernel_weights'.format(space.name, f.name), conv.weights[0])
+
+    return output
 
 
 @gin.configurable
@@ -104,9 +107,13 @@ def build_model(features, space_descs, dense_layer_size=(512,), activation='elu'
 
             dense = features
             for i, size in enumerate(dense_layer_size):
-                dense = Dense(size, activation=activation, name='state_dense_{}'.format(i))(dense)
+                op = Dense(size, activation=activation, name='state_dense_' + str(i))
+                dense = op(dense)
+
+                tf.summary.histogram('state_dense_' + str(i) + '_kernel_weights', op.weights[0])
 
             tf.summary.scalar('dense_zero_fraction', tf.nn.zero_fraction(dense))
+            tf.summary.histogram('dense_input', features)
             tf.summary.histogram('dense_output', dense)
 
         with tf.name_scope('output'):
@@ -131,8 +138,6 @@ def build_loss(inputs, outputs, feature_spec, palette):
 
             summary_image = tf.concat([truth, prediction], 3)
             tf.summary.image(spec.name, tf.transpose(summary_image, (0, 2, 3, 1)))
-            tf.summary.histogram(spec.name + '_truth_hist', truth)
-            tf.summary.histogram(spec.name + '_prediction_hist', prediction)
 
         tf.summary.scalar(spec.name, losses[-1])
 

@@ -39,6 +39,11 @@ def environment_spec(features):
 
 
 def preprocess_inputs(inputs, spaces):
+    def one_hot_encode(x, scale):
+        x = tf.squeeze(x, axis=1)
+        x = tf.cast(x, tf.int32)
+        return tf.one_hot(x, scale, axis=1)
+
     with tf.name_scope('preprocess_inputs'):
         outputs = [None] * len(spaces)
         for s in spaces:
@@ -46,9 +51,7 @@ def preprocess_inputs(inputs, spaces):
 
             for f in s.features:
                 if f.type == FeatureType.CATEGORICAL:
-                    features[f.index] = Lambda(lambda x: tf.squeeze(x, axis=1))(features[f.index])
-                    features[f.index] = Lambda(lambda x: tf.cast(x, tf.int32))(features[f.index])
-                    features[f.index] = Lambda(lambda x: tf.one_hot(x, f.scale, axis=1))(features[f.index])
+                    features[f.index] = Lambda(lambda x: one_hot_encode(x, f.scale))(features[f.index])
                 else:
                     features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
 
@@ -61,17 +64,18 @@ def embedding_dims_for_feature(feature_spec):
     return np.maximum(np.int32(np.log(feature_spec.scale)), 1)
 
 
-def embed_categorical(features, space):
-    output = features.copy()
-    for f in filter(lambda x: x.type == FeatureType.CATEGORICAL, space.features):
-        conv = Conv2D(embedding_dims_for_feature(f), 1, data_format='channels_first',
-                      name='{}_{}_conv_categorical'.format(space.name, f.name))
-        output[f.index] = conv(features[f.index])
+@gin.configurable
+def input_block(features, space_desc, conv_features=(8, 4), conv_activation='elu'):
+    conv = Conv2D(conv_features[space_desc.index], 1, data_format='channels_first', activation=conv_activation,
+                  name=space_desc.name + '_conv')
 
-        tf.summary.histogram('{}_{}_conv_out'.format(space.name, f.name), output[f.index])
-        tf.summary.histogram('{}_{}_conv_kernel_weights'.format(space.name, f.name), conv.weights[0])
+    features = Concatenate(axis=1, name=space_desc.name + '_concat_inputs')(features)
+    features = conv(features)
 
-    return output
+    tf.summary.histogram('{}_conv_out'.format(space_desc.name), features)
+    tf.summary.histogram('{}_conv_weights'.format(space_desc.name), conv.weights[0])
+
+    return features
 
 
 @gin.configurable
@@ -96,14 +100,12 @@ def output_block(state, space_desc, activation='elu'):
 @gin.configurable
 def build_model(features, space_descs, dense_layer_size=(512,), activation='elu'):
     with tf.name_scope('model'):
-        with tf.name_scope('embed_categorical'):
-            features = [embed_categorical(features[s.index], s) for s in space_descs]
+        with tf.name_scope('input'):
+            features = [input_block(features[s.index], s) for s in space_descs]
 
         with tf.name_scope('core'):
-            with tf.name_scope('concatenate_features'):
-                features = [Concatenate(axis=1)(x) for x in features]
-                features = [Flatten()(f) for f in features]
-                features = Concatenate(name='concatenate_features')(features)
+            features = [Flatten()(f) for f in features]
+            features = Concatenate(name='concatenate_features')(features)
 
             dense = features
             for i, size in enumerate(dense_layer_size):
@@ -200,7 +202,6 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16):
         if FLAGS.profile:
             hooks.append(tf.train.ProfilerHook(save_secs=60, output_dir=output_dir))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
-                                               log_step_count_steps=1000,
                                                save_checkpoint_secs=3600 if FLAGS.save_checkpoints else None) as sess:
             while not sess.should_stop():
                 obs = env.reset()

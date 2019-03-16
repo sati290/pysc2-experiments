@@ -24,6 +24,8 @@ flags.DEFINE_boolean('visualize', False, '')
 flags.DEFINE_boolean('profile', False, '')
 flags.DEFINE_integer('step_limit', 0, '', lower_bound=0)
 flags.DEFINE_string('config', 'config.gin', '')
+flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
+flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
 
@@ -196,7 +198,10 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16):
 
     try:
         config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
+        config.gpu_options.allow_growth = FLAGS.gpu_memory_allow_growth
+        if FLAGS.gpu_memory_fraction:
+            config.gpu_options.per_process_gpu_memory_fraction = FLAGS.gpu_memory_fraction
+
         hooks = [gin.tf.GinConfigSaverHook(output_dir)]
         if FLAGS.step_limit:
             hooks.append(tf.train.StopAtStepHook(last_step=FLAGS.step_limit))

@@ -76,46 +76,6 @@ def input_block(features, space_desc, conv_features=(8, 4), conv_activation='lin
 
 
 @gin.configurable
-def output_block(state, space_desc, activation='elu'):
-    def embedding_dims_for_feature(feature_spec):
-        return np.maximum(np.int32(np.log(feature_spec.scale)), 1)
-
-    output = [None] * space_desc.shape[0]
-    for f in space_desc.features:
-        name = '{}_{}_output'.format(space_desc.name, f.name)
-        with tf.name_scope(name):
-            if f.type == FeatureType.CATEGORICAL:
-                embedded_shape = (embedding_dims_for_feature(f),) + space_desc.shape[1:]
-                output[f.index] = Dense(np.prod(embedded_shape), activation=activation)(state)
-                output[f.index] = Reshape(embedded_shape)(output[f.index])
-                output[f.index] = Conv2D(f.scale, 1, data_format='channels_first', activation='linear', name=name)(output[f.index])
-            else:
-                shape = (1,) + space_desc.shape[1:]
-                output[f.index] = Dense(np.prod(shape), activation='linear')(state)
-                output[f.index] = Reshape(shape, name=name)(output[f.index])
-
-    return output
-
-
-@gin.configurable
-def output_block_spatial(state, space_desc, spatial_features=(8, 4), spatial_activation='elu', output_activation='linear'):
-    spatial_shape = (spatial_features[space_desc.index],) + space_desc.shape[1:]
-    output_spatial = Dense(np.prod(spatial_shape), activation=spatial_activation)(state)
-    output_spatial = Reshape(spatial_shape)(output_spatial)
-
-    output = [None] * space_desc.shape[0]
-    for f in space_desc.features:
-        name = '{}_{}_output'.format(space_desc.name, f.name)
-        with tf.name_scope(name):
-            if f.type == FeatureType.CATEGORICAL:
-                output[f.index] = Conv2D(f.scale, 1, data_format='channels_first', activation=output_activation, name=name)(output_spatial)
-            else:
-                output[f.index] = Conv2D(1, 1, data_format='channels_first', activation=output_activation, name=name)(output_spatial)
-
-    return output
-
-
-@gin.configurable
 def output_block_spatial_one_conv(state, space_desc, spatial_features=(8, 4), spatial_activation='elu', output_activation='linear'):
     spatial_shape = (spatial_features[space_desc.index],) + space_desc.shape[1:]
     output_spatial = Dense(np.prod(spatial_shape), activation=spatial_activation)(state)

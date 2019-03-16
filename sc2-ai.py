@@ -23,6 +23,7 @@ flags.DEFINE_boolean('save_checkpoints', False, '')
 flags.DEFINE_boolean('visualize', False, '')
 flags.DEFINE_boolean('profile', False, '')
 flags.DEFINE_integer('step_limit', 0, '', lower_bound=0)
+flags.DEFINE_string('config', 'config.gin', '')
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
 
@@ -60,12 +61,8 @@ def preprocess_inputs(inputs, spaces):
     return outputs
 
 
-def embedding_dims_for_feature(feature_spec):
-    return np.maximum(np.int32(np.log(feature_spec.scale)), 1)
-
-
 @gin.configurable
-def input_block(features, space_desc, conv_features=(8, 4), conv_activation='elu'):
+def input_block(features, space_desc, conv_features=(8, 4), conv_activation='linear'):
     conv = Conv2D(conv_features[space_desc.index], 1, data_format='channels_first', activation=conv_activation,
                   name=space_desc.name + '_conv')
 
@@ -80,6 +77,9 @@ def input_block(features, space_desc, conv_features=(8, 4), conv_activation='elu
 
 @gin.configurable
 def output_block(state, space_desc, activation='elu'):
+    def embedding_dims_for_feature(feature_spec):
+        return np.maximum(np.int32(np.log(feature_spec.scale)), 1)
+
     output = [None] * space_desc.shape[0]
     for f in space_desc.features:
         name = '{}_{}_output'.format(space_desc.name, f.name)
@@ -98,7 +98,45 @@ def output_block(state, space_desc, activation='elu'):
 
 
 @gin.configurable
-def build_model(features, space_descs, dense_layer_size=(512,), activation='elu'):
+def output_block_spatial(state, space_desc, spatial_features=(8, 4), spatial_activation='elu', output_activation='linear'):
+    spatial_shape = (spatial_features[space_desc.index],) + space_desc.shape[1:]
+    output_spatial = Dense(np.prod(spatial_shape), activation=spatial_activation)(state)
+    output_spatial = Reshape(spatial_shape)(output_spatial)
+
+    output = [None] * space_desc.shape[0]
+    for f in space_desc.features:
+        name = '{}_{}_output'.format(space_desc.name, f.name)
+        with tf.name_scope(name):
+            if f.type == FeatureType.CATEGORICAL:
+                output[f.index] = Conv2D(f.scale, 1, data_format='channels_first', activation=output_activation, name=name)(output_spatial)
+            else:
+                output[f.index] = Conv2D(1, 1, data_format='channels_first', activation=output_activation, name=name)(output_spatial)
+
+    return output
+
+
+@gin.configurable
+def output_block_spatial_one_conv(state, space_desc, spatial_features=(8, 4), spatial_activation='elu', output_activation='linear'):
+    spatial_shape = (spatial_features[space_desc.index],) + space_desc.shape[1:]
+    output_spatial = Dense(np.prod(spatial_shape), activation=spatial_activation)(state)
+    output_spatial = Reshape(spatial_shape)(output_spatial)
+
+    output_conv_features = np.sum([f.scale if f.type == FeatureType.CATEGORICAL else 1 for f in space_desc.features])
+    output_conv = Conv2D(output_conv_features, 1, data_format='channels_first', activation=output_activation)(output_spatial)
+
+    output = [None] * space_desc.shape[0]
+    next_feature_index = 0
+    for f in space_desc.features:
+        name = '{}_{}_output'.format(space_desc.name, f.name)
+        output_features = f.scale if f.type == FeatureType.CATEGORICAL else 1
+        output[f.index] = Lambda(lambda x: x[:, next_feature_index:next_feature_index + output_features], name=name)(output_conv)
+        next_feature_index = next_feature_index + output_features
+
+    return output
+
+
+@gin.configurable
+def build_model(features, space_descs, dense_layer_size=(512,), activation='elu', output_block_fn=gin.REQUIRED):
     with tf.name_scope('model'):
         with tf.name_scope('input'):
             features = [input_block(features[s.index], s) for s in space_descs]
@@ -119,7 +157,7 @@ def build_model(features, space_descs, dense_layer_size=(512,), activation='elu'
             tf.summary.histogram('dense_output', dense)
 
         with tf.name_scope('output'):
-            outputs = [output_block(dense, s) for s in space_descs]
+            outputs = [output_block_fn(dense, s) for s in space_descs]
 
     return outputs
 
@@ -149,6 +187,9 @@ def build_loss(inputs, outputs, feature_spec, palette):
 @gin.configurable
 def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16):
     output_dir = path.join('runs', time.strftime('%Y%m%d-%H%M%S', time.localtime()))
+
+    gin.parse_config_file(FLAGS.config)
+    gin.finalize()
 
     agent_interface_format = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
     env_spec = environment_spec(Features(agent_interface_format=agent_interface_format))

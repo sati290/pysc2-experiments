@@ -1,0 +1,2 @@
+
+build_model.output_block_fn = @output_block_spatial_one_conv

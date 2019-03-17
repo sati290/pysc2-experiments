@@ -8,21 +8,19 @@ import gin
 import gin.tf
 import tensorflow as tf
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Conv2DTranspose, Lambda
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras import regularizers
+from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Lambda
 from pysc2.lib import actions
-from pysc2.lib.static_data import UNIT_TYPES
 from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MINIMAP_FEATURES, Features, FeatureType
 from pysc2.env.environment import StepType
 from pysc2.env.sc2_env import SC2Env, Agent, Bot, Race, Difficulty
+from utils import LogProgressHook
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_boolean('save_checkpoints', False, '')
 flags.DEFINE_boolean('visualize', False, '')
 flags.DEFINE_boolean('profile', False, '')
-flags.DEFINE_integer('step_limit', 0, '', lower_bound=0)
+flags.DEFINE_integer('step_limit', None, '', lower_bound=0)
 flags.DEFINE_string('config', 'config.gin', '')
 flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
 flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
@@ -205,6 +203,7 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16):
         hooks = [gin.tf.GinConfigSaverHook(output_dir)]
         if FLAGS.step_limit:
             hooks.append(tf.train.StopAtStepHook(last_step=FLAGS.step_limit))
+            hooks.append(LogProgressHook(FLAGS.step_limit))
         if FLAGS.profile:
             hooks.append(tf.train.ProfilerHook(save_secs=60, output_dir=output_dir))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,

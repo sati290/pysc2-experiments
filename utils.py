@@ -1,7 +1,28 @@
 import time
 import datetime
 import logging
+import numpy as np
+import tensorflow as tf
 from tensorflow.train import SessionRunHook, SessionRunArgs, SecondOrStepTimer, get_global_step
+
+
+def print_parameter_summary():
+    trainable_vars = []
+    total_parameters = 0
+    for variable in tf.trainable_variables():
+        parameters = np.prod(variable.get_shape().as_list())
+        total_parameters += parameters
+        trainable_vars.append((variable.name, parameters))
+
+    trainable_vars.sort(key=lambda x: x[1], reverse=True)
+
+    print('List of trainable variables:')
+    print('-' * 80)
+    for name, params in trainable_vars:
+        print('{:70} {}'.format(name, params))
+
+    print('-' * 80)
+    print('Total trainable parameters:', total_parameters)
 
 
 class LogProgressHook(SessionRunHook):

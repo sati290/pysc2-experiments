@@ -217,7 +217,7 @@ def value_loss(value_pred, returns, value_factor=1):
 
 
 @gin.configurable
-def policy_loss(action_dists, action_id, action_args, returns, value, policy_factor=0.1, entropy_factor=0.00002):
+def policy_loss(action_dists, action_id, action_args, returns, value, policy_factor=0.1, entropy_factor=0.0001):
     with tf.name_scope('policy_loss'):
         def masked_arg_log_prob(arg_dist, arg_id, name):
             with tf.name_scope(name + 'log_prob'):
@@ -250,8 +250,18 @@ def policy_loss(action_dists, action_id, action_args, returns, value, policy_fac
     return loss
 
 
+def actions_to_sc2(actions, action_spec):
+    function = actions[0].item()
+    args = [
+        list(np.unravel_index(actions[1][arg.name].item(), arg.sizes))
+        for arg in action_spec.functions[function].args
+    ]
+
+    return FunctionCall(function, args)
+
+
 @gin.configurable
-def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0.8):
+def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0.9):
     output_dir = path.join('runs', time.strftime('%Y%m%d-%H%M%S', time.localtime()))
 
     gin.parse_config_file(FLAGS.config)
@@ -299,7 +309,7 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0
 
     env = SC2Env(map_name='Simple64', agent_interface_format=agent_interface_format, players=[
         Agent(Race.protoss),
-        Bot(Race.protoss, Difficulty.easy)
+        Bot(Race.protoss, Difficulty.very_easy)
     ], visualize=FLAGS.visualize)
 
     try:
@@ -321,64 +331,56 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0
 
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
                                                save_checkpoint_secs=3600 if FLAGS.save_checkpoints else None) as sess:
+
+            def feed_dict(obs, actions=None, returns=None):
+                obs_features = [
+                    np.expand_dims(obs[0].observation['feature_screen'], 0),
+                    np.expand_dims(obs[0].observation['feature_minimap'], 0)
+                ]
+
+                obs_available_actions = np.zeros((1, len(env_spec.action_spec.functions)))
+                obs_available_actions[:, obs[0].observation['available_actions']] = 1
+
+                fd = dict(zip(input_spaces, obs_features))
+                fd[input_available_actions] = obs_available_actions
+                if actions is not None:
+                    fd[input_action_id] = actions[0]
+                    used_args = {
+                        arg.name: actions[1][arg.name]
+                        for arg in env_spec.action_spec.functions[actions[0].item()].args
+                    }
+                    for k, v in input_action_args.items():
+                        if k in used_args:
+                            fd[v] = used_args[k]
+                        else:
+                            fd[v] = np.reshape(-1, (1,))
+                if returns is not None:
+                    fd[input_returns] = np.reshape(returns, (1,))
+
+                return fd
+
             while not sess.should_stop():
                 obs = env.reset()
 
-                prev_actions = None
-                prev_obs = None
-                while not sess.should_stop():
-                    def feed_dict(obs, actions=None, returns=None):
-                        obs_features = [
-                            np.expand_dims(obs[0].observation['feature_screen'], 0),
-                            np.expand_dims(obs[0].observation['feature_minimap'], 0)
-                        ]
-
-                        obs_available_actions = np.zeros((1, len(env_spec.action_spec.functions)))
-                        obs_available_actions[:, obs[0].observation['available_actions']] = 1
-
-                        fd = dict(zip(input_spaces, obs_features))
-                        fd[input_available_actions] = obs_available_actions
-                        if actions:
-                            fd[input_action_id] = actions[0]
-                            used_args = {
-                                arg.name: actions[1][arg.name]
-                                for arg in env_spec.action_spec.functions[actions[0].item()].args
-                            }
-                            for k, v in input_action_args.items():
-                                if k in used_args:
-                                    fd[v] = used_args[k]
-                                else:
-                                    fd[v] = np.reshape(-1, (1,))
-                        if returns:
-                            fd[input_returns] = np.reshape(returns, (1,))
-
-                        return fd
-
+                while not sess.should_stop() and obs[0].step_type != StepType.LAST:
                     def step_fn(step_context):
-                        actions, reward, value = step_context.session.run((out_actions, loss_pred, out_value),
-                                                                          feed_dict=feed_dict(obs))
+                        actions = step_context.session.run(out_actions, feed_dict=feed_dict(obs))
 
-                        if prev_obs:
-                            returns = reward + discount * value if obs[0].step_type != StepType.LAST else reward
-                            _ = step_context.run_with_hooks(train_op,
-                                                            feed_dict=feed_dict(prev_obs, prev_actions, returns))
+                        next_obs = env.step([actions_to_sc2(actions, env_spec.action_spec)])
 
-                        return actions
+                        if next_obs[0].step_type == StepType.LAST:
+                            returns = 0
+                        else:
+                            reward, next_value = step_context.session.run((loss_pred, out_value),
+                                                                          feed_dict=feed_dict(next_obs))
+                            returns = reward + discount * next_value
 
-                    actions = sess.run_step_fn(step_fn)
+                        _ = step_context.run_with_hooks(train_op, feed_dict=feed_dict(obs, actions, returns))
 
-                    function = actions[0].item()
-                    args = [
-                        list(np.unravel_index(actions[1][arg.name].item(), arg.sizes))
-                        for arg in env_spec.action_spec.functions[function].args
-                    ]
+                        return next_obs
 
-                    if obs[0].step_type == StepType.LAST:
-                        break
+                    obs = sess.run_step_fn(step_fn)
 
-                    prev_actions = actions
-                    prev_obs = obs
-                    obs = env.step([FunctionCall(function, args)])
     finally:
         env.close()
 

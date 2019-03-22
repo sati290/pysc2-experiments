@@ -234,13 +234,13 @@ def policy_loss(action_dists, action_id, action_args, returns, value, policy_fac
         entropies = [fn_dist.entropy()] + [v.entropy() * tf.cast(action_args[k] >= 0, tf.float32)
                                            for k, v in arg_dists.items()]
 
-        entropy = tf.reduce_mean(tf.reduce_sum(entropies))
+        entropy = tf.reduce_mean(tf.add_n(entropies))
         tf.summary.scalar('entropy', entropy)
 
         advantage = returns - value
         tf.summary.scalar('advantage', tf.reduce_mean(advantage))
 
-        policy_loss = -tf.reduce_mean(tf.reduce_sum(log_probs) * tf.stop_gradient(advantage)) * policy_factor
+        policy_loss = -tf.reduce_mean(tf.add_n(log_probs) * tf.stop_gradient(advantage)) * policy_factor
         entropy_loss = -entropy * entropy_factor
         loss = policy_loss + entropy_loss
         tf.summary.scalar('policy_loss', policy_loss)

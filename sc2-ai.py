@@ -25,6 +25,7 @@ flags.DEFINE_string('config', 'config.gin', '')
 flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
 flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
 flags.DEFINE_boolean('debug', False, '')
+flags.DEFINE_boolean('trace', False, '')
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
 
@@ -261,7 +262,7 @@ def actions_to_sc2(actions, action_spec):
 
 
 @gin.configurable
-def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0.9):
+def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0.9, batch_size=1):
     output_dir = path.join('runs', time.strftime('%Y%m%d-%H%M%S', time.localtime()))
 
     gin.parse_config_file(FLAGS.config)
@@ -331,8 +332,7 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0
 
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
                                                save_checkpoint_secs=3600 if FLAGS.save_checkpoints else None) as sess:
-
-            def feed_dict(obs, actions=None, returns=None):
+            def feed_dict(obs):
                 obs_features = [
                     np.expand_dims(obs[0].observation['feature_screen'], 0),
                     np.expand_dims(obs[0].observation['feature_minimap'], 0)
@@ -341,41 +341,72 @@ def main(args, learning_rate=0.0001, screen_size=16, minimap_size=16, discount=0
                 obs_available_actions = np.zeros((1, len(env_spec.action_spec.functions)))
                 obs_available_actions[:, obs[0].observation['available_actions']] = 1
 
+                return dict(zip(input_spaces + [input_available_actions], obs_features + [obs_available_actions]))
+
+            def train_feed_dict(obs, actions, returns):
+                obs_features = [
+                    np.stack([np.asarray(o[0].observation['feature_screen']) for o in obs]),
+                    np.stack([np.asarray(o[0].observation['feature_minimap']) for o in obs]),
+                ]
+
+                obs_available_actions = np.zeros((len(obs), len(env_spec.action_spec.functions)))
+                for i, o in enumerate(obs):
+                    obs_available_actions[i, o[0].observation['available_actions']] = 1
+
                 fd = dict(zip(input_spaces, obs_features))
                 fd[input_available_actions] = obs_available_actions
-                if actions is not None:
-                    fd[input_action_id] = actions[0]
-                    used_args = {
-                        arg.name: actions[1][arg.name]
-                        for arg in env_spec.action_spec.functions[actions[0].item()].args
-                    }
-                    for k, v in input_action_args.items():
-                        if k in used_args:
-                            fd[v] = used_args[k]
-                        else:
-                            fd[v] = np.reshape(-1, (1,))
-                if returns is not None:
-                    fd[input_returns] = np.reshape(returns, (1,))
+
+                fd[input_action_id] = np.concatenate([a[0] for a in actions])
+
+                used_args = [{arg.name for arg in env_spec.action_spec.functions[a[0].item()].args} for a in actions]
+                for k, v in input_action_args.items():
+                    fd[v] = np.asarray([
+                        a[1][k].item() if k in used_args[i] else -1
+                        for i, a in enumerate(actions)
+                    ])
+
+                fd[input_returns] = returns
 
                 return fd
 
             while not sess.should_stop():
                 obs = env.reset()
 
+                history = []
                 while not sess.should_stop() and obs[0].step_type != StepType.LAST:
                     def step_fn(step_context):
-                        actions = step_context.session.run(out_actions, feed_dict=feed_dict(obs))
+                        actions, value = step_context.session.run((out_actions, out_value), feed_dict=feed_dict(obs))
 
                         next_obs = env.step([actions_to_sc2(actions, env_spec.action_spec)])
+                        last_step = next_obs[0].step_type == StepType.LAST
 
-                        if next_obs[0].step_type == StepType.LAST:
-                            returns = 0
-                        else:
-                            reward, next_value = step_context.session.run((loss_pred, out_value),
-                                                                          feed_dict=feed_dict(next_obs))
-                            returns = reward + discount * next_value
+                        reward, next_value = step_context.session.run((loss_pred, out_value),
+                                                                      feed_dict=feed_dict(next_obs))
 
-                        _ = step_context.run_with_hooks(train_op, feed_dict=feed_dict(obs, actions, returns))
+                        history.append({
+                            'obs': obs,
+                            'actions': actions,
+                            'value': value,
+                            'reward': reward
+                        })
+
+                        if len(history) >= batch_size or last_step:
+                            if last_step:
+                                next_value = 0
+
+                            returns = np.zeros(len(history))
+                            for i in reversed(range(len(history))):
+                                v_next = returns[i+1] if i < len(history) - 1 else next_value
+                                returns[i] = history[i]['reward'] + discount * v_next
+
+                            if FLAGS.trace:
+                                print('training step', step_context.session.run(global_step), 'next value:', next_value)
+                                for i, h in enumerate(history):
+                                    print(i, 'reward:', h['reward'], 'returns:', returns[i], 'value:', h['value'], 'advantage:', returns[i] - h['value'])
+
+                            _ = step_context.run_with_hooks(train_op, feed_dict=train_feed_dict([h['obs'] for h in history], [h['actions'] for h in history], returns))
+
+                            history.clear()
 
                         return next_obs
 

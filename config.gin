@@ -1,2 +1,0 @@
-
-build_model.output_block_fn = @predictions_output

@@ -42,10 +42,9 @@ class A2CAgent:
         self.loss = self.build_loss()
 
         self.optimizer = optimizer(learning_rate=learning_rate)
-        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.train.get_or_create_global_step())
-
-        grads, _ = zip(*self.optimizer.compute_gradients(self.loss))
+        grads, vars = zip(*self.optimizer.compute_gradients(self.loss))
         grads_norm = tf.global_norm(grads)
+        self.train_op = self.optimizer.apply_gradients(zip(grads, vars), global_step=tf.train.get_or_create_global_step())
 
         self.history = []
 

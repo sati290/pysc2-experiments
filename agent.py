@@ -1,5 +1,3 @@
-import os
-from csv import DictWriter
 import gin
 import gin.tf
 import numpy as np

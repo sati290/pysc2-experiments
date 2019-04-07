@@ -68,7 +68,7 @@ def main(args):
                                                save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
 
             summary_writer = tf.summary.FileWriterCache.get(output_dir)
-            episode_rewards = deque(maxlen=50)
+            episode_rewards = deque(maxlen=100)
 
             env.start()
 
@@ -85,20 +85,25 @@ def main(args):
                         actor.receive_reward(step_context, obs[0].observation, action, next_obs[0].reward,
                                              next_obs[0].observation, next_obs[0].step_type == StepType.LAST)
 
+                        global_step = step_context.session.run(tf.train.get_global_step())
+                        if global_step % 100 == 0 and len(episode_rewards) > 0:
+                            rewards_np = np.asarray(episode_rewards)
+                            summary_writer.add_summary(
+                                tf.Summary(value=[
+                                    tf.Summary.Value(tag='episode_reward/mean', simple_value=rewards_np.mean()),
+                                    tf.Summary.Value(tag='episode_reward/min', simple_value=rewards_np.min()),
+                                    tf.Summary.Value(tag='episode_reward/max', simple_value=rewards_np.max()),
+                                    tf.Summary.Value(tag='episode_reward/stdev', simple_value=rewards_np.std())
+                                ]),
+                                global_step=global_step
+                            )
+
                         return next_obs
 
                     obs = sess.run_step_fn(step_fn)
                     episode_sum_reward += obs[0].reward
 
                 episode_rewards.append(episode_sum_reward)
-                global_step = sess.run_step_fn(lambda step_context: step_context.session.run(tf.train.get_global_step()))
-                summary_writer.add_summary(
-                    tf.Summary(value=[
-                        tf.Summary.Value(tag='episode_reward', simple_value=episode_sum_reward),
-                        tf.Summary.Value(tag='episode_reward_mean', simple_value=np.asarray(episode_rewards).mean())
-                    ]),
-                    global_step=global_step
-                )
 
 
 if __name__ == '__main__':

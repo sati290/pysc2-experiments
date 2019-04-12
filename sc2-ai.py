@@ -7,7 +7,6 @@ import gin
 import gin.tf
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
-from pysc2.env.environment import StepType
 from environment import SC2Environment
 from agent import A2CAgent
 from utils import print_parameter_summary, LogProgressHook
@@ -24,6 +23,8 @@ flags.DEFINE_string('run_name', None, '')
 flags.DEFINE_alias('n', 'run_name')
 flags.DEFINE_string('config', 'config.gin', '')
 flags.DEFINE_alias('c', 'config')
+flags.DEFINE_string('run_dir', 'runs', '')
+flags.DEFINE_alias('d', 'run_dir')
 flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
 flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
 flags.DEFINE_boolean('profile', False, '')
@@ -34,11 +35,11 @@ flags.DEFINE_boolean('trace', False, '')
 @gin.configurable
 def main(args):
     if FLAGS.resume:
-        output_dir = FLAGS.resume
+        output_dir = path.join(FLAGS.run_dir, FLAGS.resume)
         gin.parse_config_file(path.join(output_dir, 'operative_config-0.gin'))
     else:
         run_name = FLAGS.run_name or time.strftime('%Y%m%d-%H%M%S', time.localtime())
-        output_dir = path.join('runs', run_name)
+        output_dir = path.join(FLAGS.run_dir, run_name)
         gin.parse_config_file(FLAGS.config)
 
     gin.finalize()
@@ -73,17 +74,20 @@ def main(args):
             env.start()
 
             while not sess.should_stop():
-                obs = env.reset()
+                obs, _, episode_end = env.reset()
 
                 episode_sum_reward = 0
-                while not sess.should_stop() and obs[0].step_type != StepType.LAST:
+                while not sess.should_stop() and not episode_end:
                     def step_fn(step_context):
-                        action = actor.get_action(step_context, obs[0].observation)
+                        action = actor.get_action(step_context, obs[0])
 
-                        next_obs = env.step([action])
+                        next_obs, rewards, episode_end = env.step([action])
 
-                        actor.receive_reward(step_context, obs[0].observation, action, next_obs[0].reward,
-                                             next_obs[0].observation, next_obs[0].step_type == StepType.LAST)
+                        actor.receive_reward(step_context, obs[0], action, rewards[0],
+                                             next_obs[0], episode_end)
+
+                        nonlocal episode_sum_reward
+                        episode_sum_reward += rewards[0]
 
                         global_step = step_context.session.run(tf.train.get_global_step())
                         if global_step % 100 == 0 and len(episode_rewards) > 0:
@@ -98,10 +102,9 @@ def main(args):
                                 global_step=global_step
                             )
 
-                        return next_obs
+                        return next_obs, episode_end
 
-                    obs = sess.run_step_fn(step_fn)
-                    episode_sum_reward += obs[0].reward
+                    obs, episode_end = sess.run_step_fn(step_fn)
 
                 episode_rewards.append(episode_sum_reward)
 

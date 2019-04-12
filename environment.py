@@ -11,8 +11,8 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_boolean('visualize', False, '')
 
-EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'spaces'])
-SpaceDesc = namedtuple('SpaceDesc', ['name', 'index', 'shape', 'features'])
+EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'observation_spec'])
+ObservationSpec = namedtuple('ObservationSpec', ['index', 'shape', 'is_spatial', 'features'])
 
 
 @gin.configurable()
@@ -22,12 +22,16 @@ class SC2Environment:
         self._aif = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
 
         features = Features(agent_interface_format=self._aif)
+        action_spec = features.action_spec()
         obs_spec = features.observation_spec()
 
-        self.spec = EnvironmentSpec(features.action_spec(), [
-            SpaceDesc('screen', 0, obs_spec['feature_screen'], SCREEN_FEATURES),
-            SpaceDesc('minimap', 1, obs_spec['feature_minimap'], MINIMAP_FEATURES)
-        ])
+        self.spec = EnvironmentSpec(action_spec, {
+            'screen': ObservationSpec(0, obs_spec['feature_screen'], True, SCREEN_FEATURES),
+            'minimap': ObservationSpec(1, obs_spec['feature_minimap'], True, MINIMAP_FEATURES),
+            'available_actions': ObservationSpec(2, (len(action_spec.functions),), False, None),
+            'player': ObservationSpec(3, obs_spec['player'], False, None)
+
+        })
 
     def __enter__(self):
         return self
@@ -45,10 +49,26 @@ class SC2Environment:
             self._env.close()
 
     def reset(self):
-        return self._env.reset()
+        return self._wrap_obs(self._env.reset())
 
     def step(self, actions):
-        return self._env.step([self._actions_to_sc2(a) for a in actions])
+        sc2_actions = [self._actions_to_sc2(a) for a in actions]
+        obs = self._env.step(sc2_actions)
+        return self._wrap_obs(obs)
+
+    def _wrap_obs(self, obs):
+        def wrap(o):
+            available_actions = np.zeros(self.spec.observation_spec['available_actions'].shape, dtype=np.int32)
+            available_actions[o.observation['available_actions']] = 1
+
+            return {
+                'screen': o.observation['feature_screen'],
+                'minimap': o.observation['feature_minimap'],
+                'available_actions': available_actions,
+                'player': o.observation['player']
+            }
+
+        return [wrap(o) for o in obs], [o.reward for o in obs], obs[0].step_type == StepType.LAST
 
     def _actions_to_sc2(self, actions):
         function = actions[0].item()

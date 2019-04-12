@@ -8,15 +8,15 @@ from pysc2.lib.features import FeatureType
 
 
 @gin.configurable
-def input_block(features, space_desc, conv_features=(8, 4), conv_activation='linear'):
-    conv = Conv2D(conv_features[space_desc.index], 1, data_format='channels_first', activation=conv_activation,
-                  name=space_desc.name + '_conv')
+def input_block(features, name, obs_desc, conv_features=(8, 4), conv_activation='linear'):
+    conv = Conv2D(conv_features[obs_desc.index], 1, data_format='channels_first', activation=conv_activation,
+                  name=name + '_conv')
 
-    features = Concatenate(axis=1, name=space_desc.name + '_concat_inputs')(features)
+    features = Concatenate(axis=1, name=name + '_concat_inputs')(features)
     features = conv(features)
 
-    tf.summary.histogram('{}_conv_out'.format(space_desc.name), features)
-    tf.summary.histogram('{}_conv_weights'.format(space_desc.name), conv.weights[0])
+    tf.summary.histogram('{}_conv_out'.format(name), features)
+    tf.summary.histogram('{}_conv_weights'.format(name), conv.weights[0])
 
     return features
 
@@ -79,13 +79,14 @@ def sample_policy(policy):
 
 
 @gin.configurable
-class Model:
-    def __init__(self, spatial_features, available_actions, env_spec, dense_layer_size=(512,),
+class BasicModel:
+    def __init__(self, observations, env_spec, dense_layer_size=(512,),
                  activation='elu', output_predictions_fn=None):
 
         with tf.name_scope('model'):
             with tf.name_scope('input'):
-                spatial_features = [input_block(spatial_features[s.index], s) for s in env_spec.spaces]
+                spatial_features = [input_block(observations[name], name, spec)
+                                    for name, spec in env_spec.observation_spec.items() if spec.is_spatial]
 
             with tf.name_scope('core'):
                 spatial_features = [Flatten()(f) for f in spatial_features]
@@ -106,11 +107,12 @@ class Model:
                 self.value = value_output(dense)
 
             with tf.name_scope('policy'):
-                self.policy = policy_output(dense, available_actions, env_spec.action_spec)
+                self.policy = policy_output(dense, observations['available_actions'], env_spec.action_spec)
 
             with tf.name_scope('actions'):
                 self.actions = sample_policy(self.policy)
 
             if output_predictions_fn:
                 with tf.name_scope('prediction'):
-                    self.prediction = [output_predictions_fn(dense, s) for s in env_spec.spaces]
+                    self.prediction = [output_predictions_fn(dense, s)
+                                       for s in env_spec.observation_spec.values() if s.is_spatial]

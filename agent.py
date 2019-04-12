@@ -1,10 +1,9 @@
-import gin
 import gin.tf
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Lambda, RNN, LSTMCell, Softmax
+from tensorflow.keras.layers import Input, Lambda
 from pysc2.lib.features import FeatureType
-from model import Model
+from models import BasicModel
 
 
 @gin.configurable
@@ -13,7 +12,7 @@ class A2CAgent:
             self,
             env_spec,
             optimizer=tf.train.AdamOptimizer,
-            learning_rate=0.0001,
+            learning_rate=0.00005,
             discount=0.99,
             batch_size=32,
             policy_factor=1,
@@ -27,15 +26,14 @@ class A2CAgent:
         self.entropy_factor = entropy_factor
         self.value_factor = value_factor
 
-        self.input_spaces = [Input(shape=s.shape, name='input_{}'.format(s.name)) for s in env_spec.spaces]
-        self.input_available_actions = Input(shape=(len(env_spec.action_spec.functions),), name='input_available_actions')
+        self.input_observations = {name: Input(shape=spec.shape, name='input_{}'.format(name)) for name, spec in env_spec.observation_spec.items()}
         self.input_action_id = Input(shape=(), name='input_action_id')
         self.input_action_args = {arg.name: Input(shape=(), name='input_arg_{}_value'.format(arg.name)) for arg in env_spec.action_spec.types}
         self.input_returns = Input(shape=(), name='input_returns')
 
-        spatial_features = self.preprocess_spatial_inputs(env_spec.spaces)
+        observations = self.preprocess_observations()
 
-        self.model = self.build_model(spatial_features)
+        self.model = self.build_model(observations)
 
         self.loss = self.build_loss()
 
@@ -90,28 +88,11 @@ class A2CAgent:
         self.history.clear()
 
     def obs_feed(self, obs):
-        obs_features = [
-            np.expand_dims(obs['feature_screen'], 0),
-            np.expand_dims(obs['feature_minimap'], 0)
-        ]
-
-        obs_available_actions = np.zeros((1, len(self.env_spec.action_spec.functions)))
-        obs_available_actions[:, obs['available_actions']] = 1
-
-        return dict(zip(self.input_spaces + [self.input_available_actions], obs_features + [obs_available_actions]))
+        return {input_obs: np.expand_dims(obs[name], 0) for name, input_obs in self.input_observations.items()}
 
     def train_feed(self, obs, actions, returns):
-        obs_features = [
-            np.stack([np.asarray(o['feature_screen']) for o in obs]),
-            np.stack([np.asarray(o['feature_minimap']) for o in obs]),
-        ]
-
-        obs_available_actions = np.zeros((len(obs), len(self.env_spec.action_spec.functions)))
-        for i, o in enumerate(obs):
-            obs_available_actions[i, o['available_actions']] = 1
-
-        fd = dict(zip(self.input_spaces, obs_features))
-        fd[self.input_available_actions] = obs_available_actions
+        fd = {input_obs: np.stack([np.asarray(o[name]) for o in obs])
+              for name, input_obs in self.input_observations.items()}
 
         fd[self.input_action_id] = np.concatenate([a[0] for a in actions])
 
@@ -126,29 +107,32 @@ class A2CAgent:
 
         return fd
 
-    def preprocess_spatial_inputs(self, spaces):
+    def preprocess_observations(self):
         def one_hot_encode(x, scale):
             x = tf.squeeze(x, axis=1)
             x = tf.cast(x, tf.int32)
             return tf.one_hot(x, scale, axis=1)
 
-        with tf.name_scope('preprocess_inputs'):
-            outputs = [None] * len(spaces)
-            for s in spaces:
-                features = Lambda(lambda x: tf.split(x, x.get_shape()[1], axis=1))(self.input_spaces[s.index])
+        def preprocess_observation(input_obs, spec):
+            if spec.is_spatial:
+                features = Lambda(lambda x: tf.split(x, x.get_shape()[1], axis=1))(input_obs)
 
-                for f in s.features:
+                for f in spec.features:
                     if f.type == FeatureType.CATEGORICAL:
                         features[f.index] = Lambda(lambda x: one_hot_encode(x, f.scale))(features[f.index])
                     else:
                         features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
 
-                outputs[s.index] = features
+                return features
+            else:
+                return input_obs
 
-        return outputs
+        with tf.name_scope('preprocess_observations'):
+            return {name: preprocess_observation(self.input_observations[name], spec)
+                    for name, spec in self.env_spec.observation_spec.items()}
 
-    def build_model(self, spatial_features):
-        return Model(spatial_features, self.input_available_actions, self.env_spec)
+    def build_model(self, observations):
+        return BasicModel(observations, self.env_spec)
 
     def build_loss(self):
         return self.value_loss() + self.policy_loss() + self.entropy_loss()

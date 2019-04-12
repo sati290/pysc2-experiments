@@ -8,7 +8,7 @@ import gin.tf
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 from environment import SC2Environment
-from agent import A2CAgent
+from agents import A2CAgent
 from utils import print_parameter_summary, LogProgressHook
 
 FLAGS = flags.FLAGS

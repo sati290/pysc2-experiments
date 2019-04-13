@@ -9,7 +9,7 @@ from pysc2.lib.features import FeatureType
 
 @gin.configurable
 def input_block(features, name, obs_desc, conv_features=(8, 4), conv_activation='linear'):
-    conv = Conv2D(conv_features[obs_desc.index], 1, data_format='channels_first', activation=conv_activation,
+    conv = Conv2D(conv_features[obs_desc.id], 1, data_format='channels_first', activation=conv_activation,
                   name=name + '_conv')
 
     features = Concatenate(axis=1, name=name + '_concat_inputs')(features)
@@ -24,7 +24,7 @@ def input_block(features, name, obs_desc, conv_features=(8, 4), conv_activation=
 @gin.configurable
 def predictions_output(state, space_desc, spatial_features=(8, 4), spatial_activation='elu',
                        output_activation='linear'):
-    spatial_shape = (spatial_features[space_desc.index],) + space_desc.shape[1:]
+    spatial_shape = (spatial_features[space_desc.id],) + space_desc.shape[1:]
     output_spatial = Dense(np.prod(spatial_shape), activation=spatial_activation)(state)
     output_spatial = Reshape(spatial_shape)(output_spatial)
 
@@ -52,30 +52,23 @@ def value_output(state, activation='linear'):
 
 @gin.configurable
 def policy_output(state, available_actions, action_spec):
-    def probability_output(num_categories, name, mask=None):
-        x = Dense(num_categories, activation='linear', name=name + '_logits')(state)
-        if mask is not None:
-            x = tf.where(mask > 0, x, -1000 * tf.ones_like(x), name=name + '_mask')
-        return tfp.distributions.Categorical(logits=x, name=name + '_dist')
+    def logits_output(num_categories, name):
+        return Dense(num_categories, activation='linear', name=name + '_logits')(state)
 
-    fn_dist = probability_output(len(action_spec.functions), mask=available_actions, name='fn')
+    logits = [logits_output(np.prod(spec.sizes), name) for name, spec in action_spec.items()]
+    logits[0] = tf.where(available_actions > 0, logits[0], -1000 * tf.ones_like(logits[0]), name='mask_unavailable_functions')
 
-    arg_dists = {
-        arg.name: probability_output(np.prod(arg.sizes), name='arg_{}'.format(arg.name))
-        for arg in action_spec.types
+    dists = {
+        name: tfp.distributions.Categorical(logits=logits[spec.id], name=name + '_dist')
+        for name, spec in action_spec.items()
     }
 
-    return fn_dist, arg_dists
+    return dists
 
 
 @gin.configurable
 def sample_policy(policy):
-    fn_dist, arg_dists = policy
-
-    fn_sample = fn_dist.sample(name='fn_sample')
-    arg_samples = {k: v.sample(name='arg_{}_sample'.format(k)) for k, v in arg_dists.items()}
-
-    return fn_sample, arg_samples
+    return {k: v.sample(name='{}_sample'.format(k)) for k, v in policy.items()}
 
 
 @gin.configurable

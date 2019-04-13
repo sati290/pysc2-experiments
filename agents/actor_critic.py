@@ -27,9 +27,11 @@ class A2CAgent:
         self.value_factor = value_factor
 
         self.input_observations = {name: Input(shape=spec.shape, name='input_{}'.format(name)) for name, spec in env_spec.observation_spec.items()}
-        self.input_action_id = Input(shape=(), name='input_action_id')
-        self.input_action_args = {arg.name: Input(shape=(), name='input_arg_{}_value'.format(arg.name)) for arg in env_spec.action_spec.types}
+        self.input_actions = {name: Input(shape=(), name='input_arg_{}_value'.format(name), dtype='int32') for name in env_spec.action_spec}
         self.input_returns = Input(shape=(), name='input_returns')
+
+        self.function_args_mask = tf.constant(env_spec.action_spec['function_id'].args_mask, dtype=tf.float32,
+                                              name='function_args_mask')
 
         observations = self.preprocess_observations()
 
@@ -94,14 +96,8 @@ class A2CAgent:
         fd = {input_obs: np.stack([np.asarray(o[name]) for o in obs])
               for name, input_obs in self.input_observations.items()}
 
-        fd[self.input_action_id] = np.concatenate([a[0] for a in actions])
-
-        used_args = [{arg.name for arg in self.env_spec.action_spec.functions[a[0].item()].args} for a in actions]
-        for k, v in self.input_action_args.items():
-            fd[v] = np.asarray([
-                a[1][k].item() if k in used_args[i] else -1
-                for i, a in enumerate(actions)
-            ])
+        for k, v in self.input_actions.items():
+            fd[v] = np.stack([a[k].item() for a in actions])
 
         fd[self.input_returns] = returns
 
@@ -147,21 +143,13 @@ class A2CAgent:
 
     def policy_loss(self):
         with tf.name_scope('policy_loss'):
-            def masked_arg_log_prob(arg_dist, arg_id, name):
-                with tf.name_scope(name + 'log_prob'):
-                    clipped_arg_id = tf.maximum(arg_id, 0)
-                    log_prob = arg_dist.log_prob(clipped_arg_id)
-                    log_prob *= tf.cast(arg_id >= 0, tf.float32)
-                return log_prob
-
-            fn_dist, arg_dists = self.model.policy
-
-            log_probs = [fn_dist.log_prob(self.input_action_id)] + [masked_arg_log_prob(v, self.input_action_args[k], k)
-                                                                    for k, v in arg_dists.items()]
+            log_probs = [dist.log_prob(self.input_actions[name]) for name, dist in self.model.policy.items()]
+            log_probs = tf.stack(log_probs, axis=-1)
+            log_probs = log_probs * tf.gather(self.function_args_mask, self.input_actions['function_id'])
 
             advantage = self.input_returns - self.model.value
 
-            policy_loss = -tf.reduce_mean(tf.add_n(log_probs) * tf.stop_gradient(advantage)) * self.policy_factor
+            policy_loss = -tf.reduce_mean(tf.reduce_sum(log_probs, axis=-1) * tf.stop_gradient(advantage)) * self.policy_factor
 
         tf.summary.scalar('advantage', tf.reduce_mean(advantage))
         tf.summary.scalar('policy_loss', policy_loss, family='losses')
@@ -170,12 +158,11 @@ class A2CAgent:
 
     def entropy_loss(self):
         with tf.name_scope('entropy_loss'):
-            fn_dist, arg_dists = self.model.policy
+            entropies = [dist.entropy() for name, dist in self.model.policy.items()]
+            entropies = tf.stack(entropies, axis=-1)
+            entropies = entropies * tf.gather(self.function_args_mask, self.input_actions['function_id'])
 
-            entropies = [fn_dist.entropy()] + [v.entropy() * tf.cast(self.input_action_args[k] >= 0, tf.float32)
-                                               for k, v in arg_dists.items()]
-
-            entropy = tf.reduce_mean(tf.add_n(entropies))
+            entropy = tf.reduce_mean(tf.reduce_sum(entropies, axis=-1))
             entropy_loss = -entropy * self.entropy_factor
 
         tf.summary.scalar('policy_entropy', entropy)

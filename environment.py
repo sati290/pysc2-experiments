@@ -1,18 +1,19 @@
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 from absl import flags
 import gin
 import numpy as np
 from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MINIMAP_FEATURES, Features, FeatureType
 from pysc2.env.environment import StepType
 from pysc2.env.sc2_env import SC2Env, Agent, Bot, Race, Difficulty
-from pysc2.lib.actions import FunctionCall
+from pysc2.lib.actions import FunctionCall, FUNCTIONS
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_boolean('visualize', False, '')
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'observation_spec'])
-ObservationSpec = namedtuple('ObservationSpec', ['index', 'shape', 'is_spatial', 'features'])
+ObservationSpec = namedtuple('ObservationSpec', ['id', 'shape', 'is_spatial', 'features'])
+ActionSpec = namedtuple('ActionSpec', ['id', 'sizes', 'obs_space', 'args_mask'])
 
 
 @gin.configurable()
@@ -21,17 +22,35 @@ class SC2Environment:
         self._env = None
         self._aif = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
 
-        features = Features(agent_interface_format=self._aif)
-        action_spec = features.action_spec()
-        obs_spec = features.observation_spec()
+        sc2_features = Features(agent_interface_format=self._aif)
+        sc2_action_spec = sc2_features.action_spec()
+        sc2_obs_spec = sc2_features.observation_spec()
 
-        self.spec = EnvironmentSpec(action_spec, {
-            'screen': ObservationSpec(0, obs_spec['feature_screen'], True, SCREEN_FEATURES),
-            'minimap': ObservationSpec(1, obs_spec['feature_minimap'], True, MINIMAP_FEATURES),
-            'available_actions': ObservationSpec(2, (len(action_spec.functions),), False, None),
-            'player': ObservationSpec(3, obs_spec['player'], False, None)
+        fn_args_mask = np.zeros((len(sc2_action_spec.functions), len(sc2_action_spec.types) + 1), dtype=np.bool)
+        fn_args_mask[:, 0] = 1
+        for f in sc2_action_spec.functions:
+            used_args = [a.id + 1 for a in f.args]
+            fn_args_mask[f.id, used_args] = 1
+        action_spec = [('function_id', ActionSpec(0, (len(sc2_action_spec.functions),), None, fn_args_mask))]
+        for t in sc2_action_spec.types:
+            if t.name == 'screen' or t.name == 'screen2':
+                space = 'screen'
+            elif t.name == 'minimap':
+                space = 'minimap'
+            else:
+                space = None
 
-        })
+            action_spec.append((t.name, ActionSpec(len(action_spec), t.sizes, space, None)))
+        action_spec = OrderedDict(action_spec)
+
+        obs_spec = OrderedDict([
+            ('screen', ObservationSpec(0, sc2_obs_spec['feature_screen'], True, SCREEN_FEATURES)),
+            ('minimap', ObservationSpec(1, sc2_obs_spec['feature_minimap'], True, MINIMAP_FEATURES)),
+            ('available_actions', ObservationSpec(2, (len(sc2_action_spec.functions),), False, None)),
+            ('player', ObservationSpec(3, sc2_obs_spec['player'], False, None))
+        ])
+
+        self.spec = EnvironmentSpec(action_spec, obs_spec)
 
     def __enter__(self):
         return self
@@ -71,10 +90,10 @@ class SC2Environment:
         return [wrap(o) for o in obs], [o.reward for o in obs], obs[0].step_type == StepType.LAST
 
     def _actions_to_sc2(self, actions):
-        function = actions[0].item()
+        function = actions['function_id'].item()
         args = [
-            list(np.unravel_index(actions[1][arg.name].item(), arg.sizes))
-            for arg in self.spec.action_spec.functions[function].args
+            list(np.unravel_index(actions[arg.name].item(), self.spec.action_spec[arg.name].sizes))
+            for arg in FUNCTIONS[function].args
         ]
 
         return FunctionCall(function, args)

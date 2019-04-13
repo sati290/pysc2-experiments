@@ -32,7 +32,6 @@ flags.DEFINE_boolean('debug', False, '')
 flags.DEFINE_boolean('trace', False, '')
 
 
-@gin.configurable
 def main(args):
     if FLAGS.resume:
         output_dir = path.join(FLAGS.run_dir, FLAGS.resume)
@@ -65,11 +64,13 @@ def main(args):
         else:
             hooks.append(tf.train.NanTensorHook(actor.loss))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
+                                               save_summaries_secs=60,
                                                save_checkpoint_secs=FLAGS.save_checkpoint_secs,
                                                save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
 
             summary_writer = tf.summary.FileWriterCache.get(output_dir)
             episode_rewards = deque(maxlen=100)
+            last_reward_log_time = 0
 
             env.start()
 
@@ -86,11 +87,11 @@ def main(args):
                         actor.receive_reward(step_context, obs[0], action, rewards[0],
                                              next_obs[0], episode_end)
 
-                        nonlocal episode_sum_reward
+                        nonlocal episode_sum_reward, last_reward_log_time
                         episode_sum_reward += rewards[0]
 
-                        global_step = step_context.session.run(tf.train.get_global_step())
-                        if global_step % 100 == 0 and len(episode_rewards) > 0:
+                        if time.time() - last_reward_log_time >= 60 and len(episode_rewards) > 0:
+                            global_step = step_context.session.run(tf.train.get_global_step())
                             rewards_np = np.asarray(episode_rewards)
                             summary_writer.add_summary(
                                 tf.Summary(value=[
@@ -101,6 +102,8 @@ def main(args):
                                 ]),
                                 global_step=global_step
                             )
+                            print('UpdateStep', global_step, 'Rmin', rewards_np.min(), 'Rmax', rewards_np.max(), 'Rmean', rewards_np.mean(), 'Rstd', rewards_np.std())
+                            last_reward_log_time = time.time()
 
                         return next_obs, episode_end
 

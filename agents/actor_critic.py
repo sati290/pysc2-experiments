@@ -3,7 +3,9 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Input, Lambda
 from pysc2.lib.features import FeatureType
+
 from models import BasicModel
+from agents.history import History
 
 
 @gin.configurable
@@ -14,6 +16,7 @@ class A2CAgent:
             optimizer=tf.train.AdamOptimizer,
             learning_rate=0.0001,
             discount=0.99,
+            trajectory_length=16,
             batch_size=32,
             policy_factor=1,
             entropy_factor=0.0001,
@@ -44,7 +47,7 @@ class A2CAgent:
         grads_norm = tf.global_norm(grads)
         self.train_op = self.optimizer.apply_gradients(zip(grads, vars), global_step=tf.train.get_or_create_global_step())
 
-        self.history = []
+        self.history = History(trajectory_length, batch_size, env_spec)
 
         tf.summary.scalar('value', tf.reduce_mean(self.model.value))
         tf.summary.scalar('returns', tf.reduce_mean(self.input_returns))
@@ -56,48 +59,32 @@ class A2CAgent:
         return run_context.session.run(self.model.actions, feed_dict=self.obs_feed(obs))
 
     def receive_reward(self, run_context, obs, action, reward, next_obs, episode_end):
-        self.history.append({
-            'obs': obs,
-            'action': action,
-            'reward': reward
-        })
+        if self.history.append(obs, action, reward, next_obs, episode_end):
+            self.train(run_context)
 
-        if len(self.history) >= self.batch_size or episode_end:
-            if episode_end:
-                next_value = 0
-            else:
-                next_value = run_context.session.run(self.model.value, feed_dict=self.obs_feed(next_obs))
+    def train(self, run_context):
+        last_values = run_context.session.run(self.model.value, feed_dict=self.obs_feed(self.history.last_observations))
 
-            self.train(run_context, next_value)
+        returns = np.zeros_like(self.history.rewards)
+        for i in reversed(range(self.history.trajectory_length)):
+            next_values = returns[i + 1] if i + 1 < self.history.trajectory_length else last_values
+            discounts = self.discount * (1 - self.history.episode_ends[i])
+            returns[i] = self.history.rewards[i] + discounts * next_values
 
-    def train(self, run_context, next_value):
-        returns = np.zeros(len(self.history))
-        for i in reversed(range(len(self.history))):
-            v_next = returns[i+1] if i < len(self.history) - 1 else next_value
-            returns[i] = self.history[i]['reward'] + self.discount * v_next
-
-        _, values = run_context.run_with_hooks((self.train_op, self.model.value), feed_dict=self.train_feed(
-            [h['obs'] for h in self.history],
-            [h['action'] for h in self.history],
-            returns
-        ))
-
-        # values = np.array(values, ndmin=1)
-        # print('training step', run_context.session.run(tf.train.get_global_step()), 'next value:', next_value)
-        # for i, h in enumerate(self.history):
-        #     print(i, 'reward:', h['reward'], 'returns:', returns[i], 'value:', values[i], 'advantage:', returns[i] - values[i])
-
-        self.history.clear()
+        run_context.run_with_hooks(self.train_op, feed_dict=self.train_feed(self.history.observations, self.history.actions, returns))
 
     def obs_feed(self, obs):
-        return {input_obs: np.expand_dims(obs[name], 0) for name, input_obs in self.input_observations.items()}
+        return {input_obs: np.array(obs[name], ndmin=input_obs.shape.rank, copy=False) for name, input_obs in self.input_observations.items()}
 
     def train_feed(self, obs, actions, returns):
-        fd = {input_obs: np.stack([np.asarray(o[name]) for o in obs])
-              for name, input_obs in self.input_observations.items()}
+        obs = {k: v.reshape((-1,) + v.shape[2:]) for k, v in obs.items()}
+        actions = {k: v.reshape((-1,) + v.shape[2:]) for k, v in actions.items()}
+        returns = returns.reshape((-1,))
+
+        fd = self.obs_feed(obs)
 
         for k, v in self.input_actions.items():
-            fd[v] = np.stack([a[k].item() for a in actions])
+            fd[v] = actions[k]
 
         fd[self.input_returns] = returns
 

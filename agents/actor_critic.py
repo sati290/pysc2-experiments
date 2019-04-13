@@ -145,11 +145,7 @@ class A2CAgent:
 
     def entropy_loss(self):
         with tf.name_scope('entropy_loss'):
-            entropies = [dist.entropy() for name, dist in self.model.policy.items()]
-            entropies = tf.stack(entropies, axis=-1)
-            entropies = entropies * tf.gather(self.function_args_mask, self.input_actions['function_id'])
-
-            entropy = tf.reduce_mean(tf.reduce_sum(entropies, axis=-1))
+            entropy = tf.reduce_mean(tf.add_n([dist.entropy() for name, dist in self.model.policy.items()]))
             entropy_loss = -entropy * self.entropy_factor
 
         tf.summary.scalar('policy_entropy', entropy)

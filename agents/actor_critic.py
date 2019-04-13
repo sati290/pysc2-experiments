@@ -12,7 +12,7 @@ class A2CAgent:
             self,
             env_spec,
             optimizer=tf.train.AdamOptimizer,
-            learning_rate=0.00005,
+            learning_rate=0.0001,
             discount=0.99,
             batch_size=32,
             policy_factor=1,

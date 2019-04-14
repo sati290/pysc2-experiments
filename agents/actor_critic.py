@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input, Lambda
 from pysc2.lib.features import FeatureType
 
-from models import BasicModel
+from models import FullyConvModel, BasicModel
 from agents.history import History
 
 
@@ -13,6 +13,7 @@ class A2CAgent:
     def __init__(
             self,
             env_spec,
+            model_class=BasicModel,
             optimizer=tf.train.AdamOptimizer,
             learning_rate=0.0001,
             discount=0.99,
@@ -24,7 +25,6 @@ class A2CAgent:
     ):
         self.discount = discount
         self.env_spec = env_spec
-        self.batch_size = batch_size
         self.policy_factor = policy_factor
         self.entropy_factor = entropy_factor
         self.value_factor = value_factor
@@ -36,9 +36,7 @@ class A2CAgent:
         self.function_args_mask = tf.constant(env_spec.action_spec['function_id'].args_mask, dtype=tf.float32,
                                               name='function_args_mask')
 
-        observations = self.preprocess_observations()
-
-        self.model = self.build_model(observations)
+        self.model = model_class(self.input_observations, env_spec)
 
         self.loss = self.build_loss()
 
@@ -88,33 +86,6 @@ class A2CAgent:
 
         return fd
 
-    def preprocess_observations(self):
-        def one_hot_encode(x, scale):
-            x = tf.squeeze(x, axis=1)
-            x = tf.cast(x, tf.int32)
-            return tf.one_hot(x, scale, axis=1)
-
-        def preprocess_observation(input_obs, spec):
-            if spec.is_spatial:
-                features = Lambda(lambda x: tf.split(x, x.get_shape()[1], axis=1))(input_obs)
-
-                for f in spec.features:
-                    if f.type == FeatureType.CATEGORICAL:
-                        features[f.index] = Lambda(lambda x: one_hot_encode(x, f.scale))(features[f.index])
-                    else:
-                        features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
-
-                return features
-            else:
-                return input_obs
-
-        with tf.name_scope('preprocess_observations'):
-            return {name: preprocess_observation(self.input_observations[name], spec)
-                    for name, spec in self.env_spec.observation_spec.items()}
-
-    def build_model(self, observations):
-        return BasicModel(observations, self.env_spec)
-
     def build_loss(self):
         return tf.add_n([self.value_loss(), self.policy_loss(), self.entropy_loss()])
 
@@ -160,6 +131,30 @@ class A2CPredictionAgent(A2CAgent):
         super().__init__(env_spec)
 
         loss_pred = self.prediction_loss(spatial_features, feat_palettes)
+
+    def preprocess_observations(self):
+        def one_hot_encode(x, scale):
+            x = tf.squeeze(x, axis=1)
+            x = tf.cast(x, tf.int32)
+            return tf.one_hot(x, scale, axis=1)
+
+        def preprocess_observation(input_obs, spec):
+            if spec.is_spatial:
+                features = Lambda(lambda x: tf.split(x, x.get_shape()[1], axis=1))(input_obs)
+
+                for f in spec.features:
+                    if f.type == FeatureType.CATEGORICAL:
+                        features[f.index] = Lambda(lambda x: one_hot_encode(x, f.scale))(features[f.index])
+                    else:
+                        features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
+
+                return features
+            else:
+                return input_obs
+
+        with tf.name_scope('preprocess_observations'):
+            return {name: preprocess_observation(self.input_observations[name], spec)
+                    for name, spec in self.env_spec.observation_spec.items()}
 
     def prediction_loss(self, truths, palette):
         def spatial_loss(truth_features, predicted_features, space_desc):

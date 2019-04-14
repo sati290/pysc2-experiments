@@ -3,12 +3,23 @@ import gin
 import gin.tf
 import tensorflow as tf
 import tensorflow_probability as tfp
-from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Lambda, RNN, LSTMCell, Softmax
+from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Lambda, RNN, LSTMCell, Softmax, Embedding, Permute
 from pysc2.lib.features import FeatureType
 
 
 @gin.configurable
 def input_block(features, name, obs_desc, conv_features=(8, 4), conv_activation='linear'):
+    with tf.name_scope('preprocess'):
+        features = Lambda(lambda x: tf.split(x, len(obs_desc.features), axis=1))(features)
+
+        for f in obs_desc.features:
+            if f.type == FeatureType.CATEGORICAL:
+                features[f.index] = Lambda(lambda x: tf.squeeze(x, axis=1))(features[f.index])
+                features[f.index] = Embedding(f.scale, 16)(features[f.index])
+                features[f.index] = Permute((3, 1, 2))(features[f.index])
+            else:
+                features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
+
     conv = Conv2D(conv_features[obs_desc.id], 1, data_format='channels_first', activation=conv_activation,
                   name=name + '_conv')
 

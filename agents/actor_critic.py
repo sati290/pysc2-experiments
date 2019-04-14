@@ -49,8 +49,6 @@ class A2CAgent:
 
         self.history = History(trajectory_length, batch_size, env_spec)
 
-        tf.summary.scalar('value', tf.reduce_mean(self.model.value))
-        tf.summary.scalar('returns', tf.reduce_mean(self.input_returns))
         tf.summary.scalar('learning_rate', learning_rate)
         tf.summary.scalar('total_loss', self.loss, family='losses')
         tf.summary.scalar('grads_norm', grads_norm)
@@ -118,7 +116,7 @@ class A2CAgent:
         return BasicModel(observations, self.env_spec)
 
     def build_loss(self):
-        return self.value_loss() + self.policy_loss() + self.entropy_loss()
+        return tf.add_n([self.value_loss(), self.policy_loss(), self.entropy_loss()])
 
     def value_loss(self):
         with tf.name_scope('value_loss'):
@@ -138,17 +136,20 @@ class A2CAgent:
 
             policy_loss = -tf.reduce_mean(tf.reduce_sum(log_probs, axis=-1) * tf.stop_gradient(advantage)) * self.policy_factor
 
-        tf.summary.scalar('advantage', tf.reduce_mean(advantage))
         tf.summary.scalar('policy_loss', policy_loss, family='losses')
 
         return policy_loss
 
     def entropy_loss(self):
         with tf.name_scope('entropy_loss'):
-            entropy = tf.reduce_mean(tf.add_n([dist.entropy() for name, dist in self.model.policy.items()]))
+            entropies = [dist.entropy() for name, dist in self.model.policy.items()]
+            entropy = tf.reduce_mean(tf.add_n(entropies))
             entropy_loss = -entropy * self.entropy_factor
 
-        tf.summary.scalar('policy_entropy', entropy)
+        entropy_masked = tf.stack(entropies, axis=-1) * tf.gather(self.function_args_mask, self.input_actions['function_id'])
+        entropy_masked = tf.reduce_mean(tf.reduce_sum(entropy_masked, axis=-1))
+        tf.summary.scalar('policy_entropy', entropy, family='entropy')
+        tf.summary.scalar('policy_entropy_masked', entropy_masked, family='entropy')
         tf.summary.scalar('entropy_loss', entropy_loss, family='losses')
 
         return entropy_loss

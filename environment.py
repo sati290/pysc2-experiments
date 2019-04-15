@@ -90,9 +90,16 @@ class SC2Environment:
         return [wrap(o) for o in obs], [o.reward for o in obs], obs[0].step_type == StepType.LAST
 
     def _actions_to_sc2(self, actions):
+        def convert_arg(value, spec):
+            if len(spec.sizes) == 2:
+                value = np.unravel_index(value, spec.sizes)
+                value = np.flip(value)
+                return list(value)
+            else:
+                return [value]
         function = actions['function_id'].item()
         args = [
-            list(np.unravel_index(actions[arg.name].item(), self.spec.action_spec[arg.name].sizes))
+            convert_arg(actions[arg.name].item(), self.spec.action_spec[arg.name])
             for arg in FUNCTIONS[function].args
         ]
 

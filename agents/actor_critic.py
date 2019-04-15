@@ -13,12 +13,13 @@ class A2CAgent:
     def __init__(
             self,
             env_spec,
-            model_class=BasicModel,
+            model_class=FullyConvModel,
             optimizer=tf.train.AdamOptimizer,
             learning_rate=0.0001,
             discount=0.99,
             trajectory_length=16,
             batch_size=32,
+            max_grads_norm=100,
             policy_factor=1,
             entropy_factor=0.0001,
             value_factor=0.5
@@ -43,6 +44,8 @@ class A2CAgent:
         self.optimizer = optimizer(learning_rate=learning_rate)
         grads, vars = zip(*self.optimizer.compute_gradients(self.loss))
         grads_norm = tf.global_norm(grads)
+        if max_grads_norm > 0:
+            grads, _ = tf.clip_by_global_norm(grads, max_grads_norm, grads_norm)
         self.train_op = self.optimizer.apply_gradients(zip(grads, vars), global_step=tf.train.get_or_create_global_step())
 
         self.history = History(trajectory_length, batch_size, env_spec)

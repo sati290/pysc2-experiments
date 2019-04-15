@@ -6,21 +6,14 @@ import tensorflow_probability as tfp
 from tensorflow.keras.layers import Input, Dense, Concatenate, Flatten, Reshape, Conv2D, Lambda, RNN, LSTMCell, Softmax, Embedding, Permute
 from pysc2.lib.features import FeatureType
 
+from .common import preprocess_spatial_observation
+
 
 @gin.configurable
-def input_block(features, name, obs_desc, conv_features=(8, 4), conv_activation='linear'):
-    with tf.name_scope('preprocess'):
-        features = Lambda(lambda x: tf.split(x, len(obs_desc.features), axis=1))(features)
+def input_block(obs, name, obs_spec, conv_features=(8, 4), conv_activation='linear'):
+    features = preprocess_spatial_observation(obs, obs_spec, non_categorical_scaling='normalize')
 
-        for f in obs_desc.features:
-            if f.type == FeatureType.CATEGORICAL:
-                features[f.index] = Lambda(lambda x: tf.squeeze(x, axis=1))(features[f.index])
-                features[f.index] = Embedding(f.scale, 16)(features[f.index])
-                features[f.index] = Permute((3, 1, 2))(features[f.index])
-            else:
-                features[f.index] = Lambda(lambda x: x / f.scale)(features[f.index])
-
-    conv = Conv2D(conv_features[obs_desc.id], 1, data_format='channels_first', activation=conv_activation,
+    conv = Conv2D(conv_features[obs_spec.id], 1, data_format='channels_first', activation=conv_activation,
                   name=name + '_conv')
 
     features = Concatenate(axis=1, name=name + '_concat_inputs')(features)

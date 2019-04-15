@@ -11,7 +11,7 @@ from .common import preprocess_spatial_observation
 
 @gin.configurable
 def input_block(obs, name, obs_spec, conv_features=(8, 4), conv_activation='linear'):
-    features = preprocess_spatial_observation(obs, obs_spec, non_categorical_scaling='normalize')
+    features = preprocess_spatial_observation(obs, obs_spec)
 
     conv = Conv2D(conv_features[obs_spec.id], 1, data_format='channels_first', activation=conv_activation,
                   name=name + '_conv')

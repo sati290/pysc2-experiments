@@ -1,4 +1,5 @@
 import time
+import logging
 from os import path
 from collections import deque
 from absl import app, flags
@@ -13,35 +14,37 @@ from utils import print_parameter_summary, LogProgressHook
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('save_checkpoint_secs', None, '')
-flags.DEFINE_alias('s', 'save_checkpoint_secs')
 flags.DEFINE_integer('save_checkpoint_steps', None, '')
-flags.DEFINE_string('resume', None, '')
-flags.DEFINE_alias('r', 'resume')
 flags.DEFINE_integer('step_limit', None, '', lower_bound=0)
-flags.DEFINE_alias('l', 'step_limit')
 flags.DEFINE_string('run_name', None, '')
-flags.DEFINE_alias('n', 'run_name')
-flags.DEFINE_string('config', 'config.gin', '')
-flags.DEFINE_alias('c', 'config')
+flags.DEFINE_multi_string('gin_file', None, 'List of paths to the config files.')
+flags.DEFINE_multi_string('gin_param', None, 'Newline separated list of Gin parameter bindings.')
 flags.DEFINE_string('run_dir', 'runs', '')
-flags.DEFINE_alias('d', 'run_dir')
 flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
 flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
 flags.DEFINE_boolean('profile', False, '')
 flags.DEFINE_boolean('debug', False, '')
 flags.DEFINE_boolean('trace', False, '')
 
+flags.DEFINE_alias('s', 'save_checkpoint_secs')
+flags.DEFINE_alias('l', 'step_limit')
+flags.DEFINE_alias('n', 'run_name')
+flags.DEFINE_alias('d', 'run_dir')
+
 
 def main(args):
-    if FLAGS.resume:
-        output_dir = path.join(FLAGS.run_dir, FLAGS.resume)
-        gin.parse_config_file(path.join(output_dir, 'operative_config-0.gin'))
-    else:
-        run_name = FLAGS.run_name or time.strftime('%Y%m%d-%H%M%S', time.localtime())
-        output_dir = path.join(FLAGS.run_dir, run_name)
-        gin.parse_config_file(FLAGS.config)
+    run_name = FLAGS.run_name or time.strftime('%Y%m%d-%H%M%S', time.localtime())
+    output_dir = path.join(FLAGS.run_dir, run_name)
 
-    gin.finalize()
+    gin_files = []
+    if path.exists(output_dir):
+        print('Resuming', output_dir)
+        gin_files.append(path.join(output_dir, 'operative_config-0.gin'))
+
+    if FLAGS.gin_file:
+        gin_files += FLAGS.gin_file
+
+    gin.parse_config_files_and_bindings(gin_files, FLAGS.gin_param, finalize_config=True)
 
     with SC2Environment() as env:
         actor = A2CAgent(env.spec)
@@ -102,7 +105,8 @@ def main(args):
                                 ]),
                                 global_step=global_step
                             )
-                            print('UpdateStep', global_step, 'Rmin', rewards_np.min(), 'Rmax', rewards_np.max(), 'Rmean', rewards_np.mean(), 'Rstd', rewards_np.std())
+                            logging.info('UpdateStep {} Rmin {} Rmax {} Rmean {} Rstd {}'.format(
+                                global_step, rewards_np.min(), rewards_np.max(), rewards_np.mean(), rewards_np.std()))
                             last_reward_log_time = time.time()
 
                         return next_obs, episode_end

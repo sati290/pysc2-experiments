@@ -16,18 +16,18 @@ def print_parameter_summary():
 
     trainable_vars.sort(key=lambda x: x[1], reverse=True)
 
-    print('List of trainable variables:')
-    print('-' * 80)
+    logging.info('List of trainable variables:')
+    logging.info('-' * 80)
     for name, params in trainable_vars:
-        print('{:70} {}'.format(name, params))
+        logging.info('{:70} {}'.format(name, params))
 
-    print('-' * 80)
-    print('Total trainable parameters:', total_parameters)
+    logging.info('-' * 80)
+    logging.info('Total trainable parameters: {}'.format(total_parameters))
 
 
 class LogProgressHook(SessionRunHook):
 
-    def __init__(self, step_limit, log_interval_secs=10):
+    def __init__(self, step_limit, log_interval_secs=60):
         self.step_limit = step_limit
         self.log_interval_secs = log_interval_secs
         self.global_step = None
@@ -48,9 +48,11 @@ class LogProgressHook(SessionRunHook):
 
             steps_per_sec = current_step / elapsed_time
             remaining_secs = (self.step_limit - current_step) / steps_per_sec
+            eta_secs = now + remaining_secs
             td = datetime.timedelta(seconds=remaining_secs)
 
-            logging.info('{}/{} steps, {:.1f} steps/sec, remaining time: {}'.format(current_step, self.step_limit, steps_per_sec, td))
+            print('{}/{} steps, {:.2f} steps/sec, remaining time: {}, ETA: {}'.format(
+                current_step, self.step_limit, steps_per_sec, td, time.strftime('%H:%M', time.localtime(eta_secs))))
 
             self.last_log_global_step = current_step
             self.last_log_time = now

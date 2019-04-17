@@ -4,8 +4,8 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input, Lambda
 from pysc2.lib.features import FeatureType
 
-from models import FullyConvModel, BasicModel
-from agents.history import History
+from ..models import FullyConvModel
+from .history import History
 
 
 @gin.configurable

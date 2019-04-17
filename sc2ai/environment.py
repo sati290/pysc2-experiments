@@ -1,15 +1,10 @@
 from collections import namedtuple, OrderedDict
-from absl import flags
 import gin
 import numpy as np
 from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MINIMAP_FEATURES, Features, FeatureType
 from pysc2.env.environment import StepType
 from pysc2.env.sc2_env import SC2Env, Agent, Bot, Race, Difficulty
 from pysc2.lib.actions import FunctionCall, FUNCTIONS
-
-FLAGS = flags.FLAGS
-
-flags.DEFINE_boolean('visualize', False, '')
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'observation_spec'])
 ObservationSpec = namedtuple('ObservationSpec', ['id', 'shape', 'is_spatial', 'features'])
@@ -18,9 +13,10 @@ ActionSpec = namedtuple('ActionSpec', ['id', 'sizes', 'obs_space', 'args_mask'])
 
 @gin.configurable()
 class SC2Environment:
-    def __init__(self, screen_size=16, minimap_size=16):
+    def __init__(self, screen_size=16, minimap_size=16, visualize=False):
         self._env = None
         self._aif = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
+        self._visualize = visualize
 
         sc2_features = Features(agent_interface_format=self._aif)
         sc2_action_spec = sc2_features.action_spec()
@@ -61,7 +57,7 @@ class SC2Environment:
     def start(self):
         self._env = SC2Env(map_name='MoveToBeacon', agent_interface_format=self._aif, players=[
             Agent(Race.protoss)
-        ], visualize=FLAGS.visualize)
+        ], visualize=self._visualize)
 
     def stop(self):
         if self._env:

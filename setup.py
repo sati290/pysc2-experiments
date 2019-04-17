@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='sc2-ai',
+    name='sc2ai',
     version='',
     packages=find_packages(),
     url='',

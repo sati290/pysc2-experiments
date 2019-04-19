@@ -1,9 +1,9 @@
 from collections import namedtuple, OrderedDict
+import atexit
 import gin
 import numpy as np
 from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MINIMAP_FEATURES, Features, FeatureType
 from pysc2.env.environment import StepType
-from pysc2.env.sc2_env import SC2Env, Agent, Bot, Race, Difficulty
 from pysc2.lib.actions import FunctionCall, FUNCTIONS
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'observation_spec'])
@@ -48,20 +48,19 @@ class SC2Environment:
 
         self.spec = EnvironmentSpec(action_spec, obs_spec)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
-
     def start(self):
+        from pysc2.env.sc2_env import SC2Env, Agent, Race
+
         self._env = SC2Env(map_name='MoveToBeacon', agent_interface_format=self._aif, players=[
             Agent(Race.protoss)
         ], visualize=self._visualize)
 
+        atexit.register(self._env.close)
+
     def stop(self):
         if self._env:
             self._env.close()
+            atexit.unregister(self._env.close)
 
     def reset(self):
         return self._wrap_obs(self._env.reset())

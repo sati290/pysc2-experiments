@@ -8,9 +8,11 @@ import gin
 import gin.tf
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
-from environment import SC2Environment
-from agents import A2CAgent
-from utils import print_parameter_summary, LogProgressHook
+
+from .environment import SC2Environment
+from .agents import A2CAgent
+from .training import Runner, RewardSummaryHook
+from .utils import print_parameter_summary, LogProgressHook
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('save_checkpoint_secs', None, '')
@@ -47,7 +49,9 @@ def main(args):
     gin.parse_config_files_and_bindings(gin_files, FLAGS.gin_param, finalize_config=True)
 
     with SC2Environment() as env:
-        actor = A2CAgent(env.spec)
+        summary_writer = tf.summary.FileWriterCache.get(output_dir)
+        agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_writer=summary_writer))
+        runner = Runner(env, agent)
 
         print_parameter_summary()
 
@@ -65,55 +69,18 @@ def main(args):
         if FLAGS.debug:
             hooks.append(tf_debug.LocalCLIDebugHook())
         else:
-            hooks.append(tf.train.NanTensorHook(actor.loss))
+            hooks.append(tf.train.NanTensorHook(agent.loss))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
                                                save_summaries_secs=60,
                                                save_checkpoint_secs=FLAGS.save_checkpoint_secs,
                                                save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
-
-            summary_writer = tf.summary.FileWriterCache.get(output_dir)
-            episode_rewards = deque(maxlen=100)
-            last_reward_log_time = 0
-
             env.start()
 
             while not sess.should_stop():
-                obs, _, episode_end = env.reset()
+                def step_fn(step_context):
+                    runner.train(step_context, 512)
 
-                episode_sum_reward = 0
-                while not sess.should_stop() and not episode_end:
-                    def step_fn(step_context):
-                        action = actor.get_action(step_context, obs[0])
-
-                        next_obs, rewards, episode_end = env.step([action])
-
-                        actor.receive_reward(step_context, obs[0], action, rewards[0],
-                                             next_obs[0], episode_end)
-
-                        nonlocal episode_sum_reward, last_reward_log_time
-                        episode_sum_reward += rewards[0]
-
-                        if time.time() - last_reward_log_time >= 60 and len(episode_rewards) > 0:
-                            global_step = step_context.session.run(tf.train.get_global_step())
-                            rewards_np = np.asarray(episode_rewards)
-                            summary_writer.add_summary(
-                                tf.Summary(value=[
-                                    tf.Summary.Value(tag='episode_reward/mean', simple_value=rewards_np.mean()),
-                                    tf.Summary.Value(tag='episode_reward/min', simple_value=rewards_np.min()),
-                                    tf.Summary.Value(tag='episode_reward/max', simple_value=rewards_np.max()),
-                                    tf.Summary.Value(tag='episode_reward/stdev', simple_value=rewards_np.std())
-                                ]),
-                                global_step=global_step
-                            )
-                            logging.info('UpdateStep {} Rmin {} Rmax {} Rmean {} Rstd {}'.format(
-                                global_step, rewards_np.min(), rewards_np.max(), rewards_np.mean(), rewards_np.std()))
-                            last_reward_log_time = time.time()
-
-                        return next_obs, episode_end
-
-                    obs, episode_end = sess.run_step_fn(step_fn)
-
-                episode_rewards.append(episode_sum_reward)
+                sess.run_step_fn(step_fn)
 
 
 if __name__ == '__main__':

@@ -18,7 +18,12 @@ class History:
 
         self.step = 0
 
+    def reset(self):
+        self.step = 0
+
     def append(self, obs, actions, reward, next_obs, episode_end):
+        assert self.step < self.trajectory_length * self.batch_size
+
         traj_step = self.step % self.trajectory_length
         batch_idx = (self.step // self.trajectory_length) % self.batch_size
 
@@ -37,4 +42,6 @@ class History:
 
         self.step += 1
 
-        return self.step % (self.trajectory_length * self.batch_size) == 0
+    def batch_ready(self):
+        assert self.step <= self.trajectory_length * self.batch_size
+        return self.step == self.trajectory_length * self.batch_size

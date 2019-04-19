@@ -2,17 +2,17 @@ import gin.tf
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Input, Lambda
-from pysc2.lib.features import FeatureType
 
 from ..models import FullyConvModel
 from .history import History
 
 
-@gin.configurable
+@gin.configurable(blacklist=('callbacks',))
 class A2CAgent:
     def __init__(
             self,
             env_spec,
+            callbacks=None,
             model_class=FullyConvModel,
             optimizer=tf.train.AdamOptimizer,
             learning_rate=0.0001,
@@ -24,8 +24,8 @@ class A2CAgent:
             entropy_factor=0.0001,
             value_factor=0.5
     ):
+        self.callbacks = callbacks
         self.discount = discount
-        self.env_spec = env_spec
         self.policy_factor = policy_factor
         self.entropy_factor = entropy_factor
         self.value_factor = value_factor
@@ -57,9 +57,15 @@ class A2CAgent:
     def get_action(self, run_context, obs):
         return run_context.session.run(self.model.actions, feed_dict=self.obs_feed(obs))
 
-    def receive_reward(self, run_context, obs, action, reward, next_obs, episode_end):
-        if self.history.append(obs, action, reward, next_obs, episode_end):
+    def on_step(self, run_context, obs, action, reward, next_obs, episode_end):
+        self.history.append(obs, action, reward, next_obs, episode_end)
+
+        if self.callbacks:
+            self.callbacks.on_step(reward, episode_end)
+
+        if self.history.batch_ready():
             self.train(run_context)
+            self.history.reset()
 
     def train(self, run_context):
         last_values = run_context.session.run(self.model.value, feed_dict=self.obs_feed(self.history.last_observations))
@@ -71,6 +77,10 @@ class A2CAgent:
             returns[i] = self.history.rewards[i] + discounts * next_values
 
         run_context.run_with_hooks(self.train_op, feed_dict=self.train_feed(self.history.observations, self.history.actions, returns))
+
+        if self.callbacks:
+            global_step = run_context.session.run(tf.train.get_global_step())
+            self.callbacks.on_update(global_step)
 
     def obs_feed(self, obs):
         return {input_obs: np.array(obs[name], ndmin=input_obs.shape.rank, copy=False) for name, input_obs in self.input_observations.items()}

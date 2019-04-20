@@ -20,4 +20,8 @@ class Runner:
             next_obs, reward, episode_end = self.env.step([action])
 
             self.agent.on_step(run_context, self.obs[0], action, reward[0], next_obs[0], episode_end)
-            self.obs = next_obs
+
+            if episode_end:
+                self.obs, _, _ = self.env.reset()
+            else:
+                self.obs = next_obs

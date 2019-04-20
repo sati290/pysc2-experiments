@@ -16,32 +16,41 @@ class History:
         self.rewards = np.zeros(shape, dtype=np.float32)
         self.episode_ends = np.zeros(shape, dtype=np.bool)
 
-        self.step = 0
+        self.traj_step = 0
+        self.batch_idx = 0
 
     def reset(self):
-        self.step = 0
+        self.traj_step = 0
+        self.batch_idx = 0
 
-    def append(self, obs, actions, reward, next_obs, episode_end):
-        assert self.step < self.trajectory_length * self.batch_size
+    def append(self, obs, actions, rewards, next_obs, episode_ends):
+        assert self.traj_step < self.trajectory_length
+        assert self.batch_idx < self.batch_size
 
-        traj_step = self.step % self.trajectory_length
-        batch_idx = (self.step // self.trajectory_length) % self.batch_size
+        num_envs = len(rewards)
+        assert self.batch_size % num_envs == 0
+
+        batch_start = self.batch_idx
+        batch_end = batch_start + num_envs
 
         for name, o in obs.items():
-            self.observations[name][traj_step, batch_idx] = o
+            self.observations[name][self.traj_step, batch_start:batch_end] = o
 
         for name, a in actions.items():
-            self.actions[name][traj_step, batch_idx] = a
+            self.actions[name][self.traj_step, batch_start:batch_end] = a
 
-        self.rewards[traj_step, batch_idx] = reward
-        self.episode_ends[traj_step, batch_idx] = episode_end
+        self.rewards[self.traj_step, batch_start:batch_end] = rewards
+        self.episode_ends[self.traj_step, batch_start:batch_end] = episode_ends
 
-        if traj_step + 1 == self.trajectory_length:
+        if self.traj_step + 1 == self.trajectory_length:
             for name, o in next_obs.items():
-                self.last_observations[name][batch_idx] = o
+                self.last_observations[name][batch_start:batch_end] = o
 
-        self.step += 1
+            self.traj_step = 0
+            self.batch_idx += num_envs
+        else:
+            self.traj_step += 1
 
     def batch_ready(self):
-        assert self.step <= self.trajectory_length * self.batch_size
-        return self.step == self.trajectory_length * self.batch_size
+        assert self.batch_idx <= self.batch_size
+        return self.batch_idx == self.batch_size

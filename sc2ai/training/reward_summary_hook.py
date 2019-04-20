@@ -10,15 +10,18 @@ class RewardSummaryHook:
         self.write_summaries_secs = write_summaries_secs
 
         self.last_summary_time = 0
-        self.sum_episode_rewards = 0
+        self.sum_episode_rewards = None
         self.episode_rewards = deque(maxlen=100)
 
-    def on_step(self, reward, episode_end):
-        self.sum_episode_rewards += reward
+    def on_step(self, rewards, episode_ends):
+        if self.sum_episode_rewards is None:
+            self.sum_episode_rewards = np.zeros(len(rewards), dtype=np.float32)
+        self.sum_episode_rewards += rewards
 
-        if episode_end:
-            self.episode_rewards.append(self.sum_episode_rewards)
-            self.sum_episode_rewards = 0
+        for i, end in enumerate(episode_ends):
+            if end:
+                self.episode_rewards.append(self.sum_episode_rewards[i])
+                self.sum_episode_rewards[i] = 0
 
     def on_update(self, global_step):
         if self.summary_writer and time.time() - self.last_summary_time > self.write_summaries_secs and len(self.episode_rewards) > 0:

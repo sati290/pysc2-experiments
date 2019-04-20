@@ -9,7 +9,7 @@ import gin.tf
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 
-from .environment import SC2Environment
+from .environments import VecEnv, SC2Environment
 from .agents import A2CAgent
 from .training import Runner, RewardSummaryHook
 from .utils import print_parameter_summary, LogProgressHook
@@ -48,7 +48,7 @@ def main(args):
 
     gin.parse_config_files_and_bindings(gin_files, FLAGS.gin_param, finalize_config=True)
 
-    env = SC2Environment()
+    env = VecEnv(SC2Environment)
     summary_writer = tf.summary.FileWriterCache.get(output_dir)
     agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_writer=summary_writer))
     runner = Runner(env, agent)

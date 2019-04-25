@@ -1,12 +1,14 @@
 import sys
 from collections import namedtuple, OrderedDict
 import atexit
+import logging
 from absl import flags
 import gin
 import numpy as np
 from pysc2.lib.features import parse_agent_interface_format, SCREEN_FEATURES, MINIMAP_FEATURES, Features, FeatureType
 from pysc2.env.environment import StepType
 from pysc2.lib.actions import FunctionCall, FUNCTIONS
+from pysc2.lib.remote_controller import RequestError
 
 EnvironmentSpec = namedtuple('EnvironmentSpec', ['action_spec', 'observation_spec'])
 ObservationSpec = namedtuple('ObservationSpec', ['id', 'shape', 'is_spatial', 'features'])
@@ -61,22 +63,30 @@ class SC2Environment:
 
         self.spec = EnvironmentSpec(action_spec, obs_spec)
 
-    def start(self):
         from pysc2.env.sc2_env import SC2Env, Agent, Race
 
         if not flags.FLAGS.is_parsed():
             flags.FLAGS(sys.argv)
 
-        self._env = SC2Env(map_name='MoveToBeacon', agent_interface_format=self._aif, players=[
-            Agent(Race.protoss)
-        ], visualize=self._visualize)
+        num_retries = 3
+        while True:
+            try:
+                self._env = SC2Env(map_name='MoveToBeacon', agent_interface_format=self._aif, players=[
+                    Agent(Race.protoss)
+                ], visualize=self._visualize)
+
+                break
+            except RequestError:
+                num_retries -= 1
+                logging.error('SC2Env creation failed, {} retries remaining'.format(num_retries))
+                if num_retries <= 0:
+                    raise
 
         atexit.register(self._env.close)
 
-    def stop(self):
-        if self._env:
-            self._env.close()
-            atexit.unregister(self._env.close)
+    def close(self):
+        self._env.close()
+        atexit.unregister(self._env.close)
 
     def reset(self):
         obs, rewards, done = self._wrap_obs(self._env.reset())

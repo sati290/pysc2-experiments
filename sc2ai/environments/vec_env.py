@@ -7,13 +7,7 @@ def _worker(env_fn, pipe):
     try:
         while True:
             cmd, data = pipe.recv()
-            if cmd == 'start':
-                env.start()
-                pipe.send('done')
-            elif cmd == 'stop':
-                env.stop()
-                pipe.send('done')
-            elif cmd == 'step':
+            if cmd == 'step':
                 result = env.step(data)
                 pipe.send(result)
             elif cmd == 'reset':
@@ -21,6 +15,9 @@ def _worker(env_fn, pipe):
                 pipe.send(result)
             elif cmd == 'get_spec':
                 pipe.send(env.spec)
+            elif cmd == 'close':
+                env.close()
+                break
             else:
                 raise NotImplementedError
     finally:
@@ -38,15 +35,11 @@ class VecEnv:
         self._pipes[0].send(('get_spec', None))
         self.spec = self._pipes[0].recv()
 
-    def start(self):
+    def close(self):
         for p in self._pipes:
-            p.send(('start', None))
-        self._receive()
-
-    def stop(self):
-        for p in self._pipes:
-            p.send(('stop', None))
-        self._receive()
+            p.send(('close', None))
+        for proc in self._procs:
+            proc.join()
 
     def reset(self):
         for p in self._pipes:

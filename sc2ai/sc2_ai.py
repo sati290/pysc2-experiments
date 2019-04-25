@@ -49,38 +49,38 @@ def main(args):
     gin.parse_config_files_and_bindings(gin_files, FLAGS.gin_param, finalize_config=True)
 
     env = VecEnv(SC2Environment)
-    summary_writer = tf.summary.FileWriterCache.get(output_dir)
-    agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_writer=summary_writer))
-    runner = Runner(env, agent)
+    try:
+        agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_output_dir=output_dir))
+        runner = Runner(env, agent)
 
-    print_parameter_summary()
+        print_parameter_summary()
 
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = FLAGS.gpu_memory_allow_growth
-    if FLAGS.gpu_memory_fraction:
-        config.gpu_options.per_process_gpu_memory_fraction = FLAGS.gpu_memory_fraction
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = FLAGS.gpu_memory_allow_growth
+        if FLAGS.gpu_memory_fraction:
+            config.gpu_options.per_process_gpu_memory_fraction = FLAGS.gpu_memory_fraction
 
-    hooks = [gin.tf.GinConfigSaverHook(output_dir)]
-    if FLAGS.step_limit:
-        hooks.append(tf.train.StopAtStepHook(last_step=FLAGS.step_limit))
-        hooks.append(LogProgressHook(FLAGS.step_limit))
-    if FLAGS.profile:
-        hooks.append(tf.train.ProfilerHook(save_secs=60, output_dir=output_dir))
-    if FLAGS.debug:
-        hooks.append(tf_debug.LocalCLIDebugHook())
-    else:
-        hooks.append(tf.train.NanTensorHook(agent.loss))
-    with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
-                                           save_summaries_secs=60,
-                                           save_checkpoint_secs=FLAGS.save_checkpoint_secs,
-                                           save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
-        env.start()
+        hooks = [gin.tf.GinConfigSaverHook(output_dir)]
+        if FLAGS.step_limit:
+            hooks.append(tf.train.StopAtStepHook(last_step=FLAGS.step_limit))
+            hooks.append(LogProgressHook(FLAGS.step_limit))
+        if FLAGS.profile:
+            hooks.append(tf.train.ProfilerHook(save_secs=60, output_dir=output_dir))
+        if FLAGS.debug:
+            hooks.append(tf_debug.LocalCLIDebugHook())
+        else:
+            hooks.append(tf.train.NanTensorHook(agent.loss))
+        with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
+                                               save_summaries_secs=60,
+                                               save_checkpoint_secs=FLAGS.save_checkpoint_secs,
+                                               save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
+            while not sess.should_stop():
+                def step_fn(step_context):
+                    runner.train(step_context, 512)
 
-        while not sess.should_stop():
-            def step_fn(step_context):
-                runner.train(step_context, 512)
-
-            sess.run_step_fn(step_fn)
+                sess.run_step_fn(step_fn)
+    finally:
+        env.close()
 
 
 if __name__ == '__main__':

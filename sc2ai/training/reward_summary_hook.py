@@ -5,8 +5,8 @@ import tensorflow as tf
 
 
 class RewardSummaryHook:
-    def __init__(self, summary_writer=None, write_summaries_secs=60):
-        self.summary_writer = summary_writer
+    def __init__(self, summary_output_dir=None, write_summaries_secs=60):
+        self.summary_output_dir = summary_output_dir
         self.write_summaries_secs = write_summaries_secs
 
         self.last_summary_time = 0
@@ -24,9 +24,10 @@ class RewardSummaryHook:
                 self.sum_episode_rewards[i] = 0
 
     def on_update(self, global_step):
-        if self.summary_writer and time.time() - self.last_summary_time > self.write_summaries_secs and len(self.episode_rewards) > 0:
+        if self.summary_output_dir and time.time() - self.last_summary_time > self.write_summaries_secs and len(self.episode_rewards) > 0:
+            summary_writer = tf.summary.FileWriterCache.get(self.summary_output_dir)
             rewards_np = np.asarray(self.episode_rewards)
-            self.summary_writer.add_summary(
+            summary_writer.add_summary(
                 tf.Summary(value=[
                     tf.Summary.Value(tag='episode_reward/mean', simple_value=rewards_np.mean()),
                     tf.Summary.Value(tag='episode_reward/min', simple_value=rewards_np.min()),

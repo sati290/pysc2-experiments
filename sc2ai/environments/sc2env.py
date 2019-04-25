@@ -16,21 +16,28 @@ ActionSpec = namedtuple('ActionSpec', ['id', 'sizes', 'obs_space', 'args_mask'])
 
 @gin.configurable
 class SC2Environment:
-    def __init__(self, screen_size=16, minimap_size=16, visualize=False):
+    def __init__(self, screen_size=16, minimap_size=16, function_set='minigames', visualize=False):
         self._env = None
         self._aif = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
         self._visualize = visualize
+
+        if function_set == 'all':
+            self._func_ids = [f.id for f in FUNCTIONS]
+        elif function_set == 'minigames':
+            self._func_ids = [0, 1, 2, 3, 4, 6, 7, 12, 13, 42, 44, 50, 91, 183, 234, 309, 331, 332, 333, 334, 451, 452, 490]
+        else:
+            raise ValueError
 
         sc2_features = Features(agent_interface_format=self._aif)
         sc2_action_spec = sc2_features.action_spec()
         sc2_obs_spec = sc2_features.observation_spec()
 
-        fn_args_mask = np.zeros((len(sc2_action_spec.functions), len(sc2_action_spec.types) + 1), dtype=np.bool)
+        fn_args_mask = np.zeros((len(self._func_ids), len(sc2_action_spec.types) + 1), dtype=np.bool)
         fn_args_mask[:, 0] = 1
-        for func in sc2_action_spec.functions:
-            used_args = [a.id + 1 for a in func.args]
-            fn_args_mask[func.id, used_args] = 1
-        action_spec = [('function_id', ActionSpec(0, (len(sc2_action_spec.functions),), None, fn_args_mask))]
+        for i, func_id in enumerate(self._func_ids):
+            used_args = [a.id + 1 for a in FUNCTIONS[func_id].args]
+            fn_args_mask[i, used_args] = 1
+        action_spec = [('function_id', ActionSpec(0, (len(self._func_ids),), None, fn_args_mask))]
         for t in sc2_action_spec.types:
             if t.name == 'screen' or t.name == 'screen2':
                 space = 'screen'
@@ -48,7 +55,7 @@ class SC2Environment:
         obs_spec = OrderedDict([
             ('screen', ObservationSpec(0, sc2_obs_spec['feature_screen'], True, feature_spec(SCREEN_FEATURES))),
             ('minimap', ObservationSpec(1, sc2_obs_spec['feature_minimap'], True, feature_spec(MINIMAP_FEATURES))),
-            ('available_actions', ObservationSpec(2, (len(sc2_action_spec.functions),), False, None)),
+            ('available_actions', ObservationSpec(2, (len(self._func_ids),), False, None)),
             ('player', ObservationSpec(3, sc2_obs_spec['player'], False, None))
         ])
 
@@ -89,12 +96,13 @@ class SC2Environment:
     def _wrap_obs(self, obs):
         def wrap(o):
             available_actions = np.zeros(self.spec.observation_spec['available_actions'].shape, dtype=np.int32)
-            available_actions[o.observation['available_actions']] = 1
+            func_ids = [i for i, func_id in enumerate(self._func_ids) if func_id in o.observation['available_actions']] # TODO: this is too slow when using all function ids
+            available_actions[func_ids] = 1
 
             return {
                 'screen': np.asarray(o.observation['feature_screen']),
                 'minimap': np.asarray(o.observation['feature_minimap']),
-                'available_actions': np.asarray(available_actions),
+                'available_actions': available_actions,
                 'player': np.asarray(o.observation['player'])
             }
 
@@ -108,7 +116,7 @@ class SC2Environment:
                 return list(value)
             else:
                 return [value]
-        function = actions['function_id'].item()
+        function = self._func_ids[actions['function_id']]
         args = [
             convert_arg(actions[arg.name].item(), self.spec.action_spec[arg.name])
             for arg in FUNCTIONS[function].args

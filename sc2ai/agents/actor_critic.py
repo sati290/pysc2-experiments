@@ -34,10 +34,7 @@ class A2CAgent:
         self.input_actions = {name: Input(shape=(), name='input_arg_{}_value'.format(name), dtype='int32') for name in env_spec.action_spec}
         self.input_returns = Input(shape=(), name='input_returns')
 
-        self.function_args_mask = tf.constant(env_spec.action_spec['function_id'].args_mask, dtype=tf.float32,
-                                              name='function_args_mask')
-
-        self.model = model_class(self.input_observations, env_spec)
+        self.model = model_class(self.input_observations, self.input_actions, env_spec)
 
         self.loss = self.build_loss()
 
@@ -55,7 +52,7 @@ class A2CAgent:
         tf.summary.scalar('grads_norm', grads_norm)
 
     def get_action(self, run_context, obs):
-        return run_context.session.run(self.model.actions, feed_dict=self.obs_feed(obs))
+        return run_context.session.run(self.model.policy.sample, feed_dict=self.obs_feed(obs))
 
     def on_step(self, run_context, obs, action, reward, next_obs, episode_end):
         self.history.append(obs, action, reward, next_obs, episode_end)
@@ -112,13 +109,8 @@ class A2CAgent:
 
     def policy_loss(self):
         with tf.name_scope('policy_loss'):
-            log_probs = [dist.log_prob(self.input_actions[name]) for name, dist in self.model.policy.items()]
-            log_probs = tf.stack(log_probs, axis=-1)
-            log_probs = log_probs * tf.gather(self.function_args_mask, self.input_actions['function_id'])
-
             advantage = self.input_returns - self.model.value
-
-            policy_loss = -tf.reduce_mean(tf.reduce_sum(log_probs, axis=-1) * tf.stop_gradient(advantage)) * self.policy_factor
+            policy_loss = -tf.reduce_mean(self.model.policy.log_prob * tf.stop_gradient(advantage)) * self.policy_factor
 
         tf.summary.scalar('policy_loss', policy_loss, family='losses')
 
@@ -126,14 +118,10 @@ class A2CAgent:
 
     def entropy_loss(self):
         with tf.name_scope('entropy_loss'):
-            entropies = [dist.entropy() for name, dist in self.model.policy.items()]
-            entropy = tf.reduce_mean(tf.add_n(entropies))
+            entropy = tf.reduce_mean(self.model.policy.entropy)
             entropy_loss = -entropy * self.entropy_factor
 
-        entropy_masked = tf.stack(entropies, axis=-1) * tf.gather(self.function_args_mask, self.input_actions['function_id'])
-        entropy_masked = tf.reduce_mean(tf.reduce_sum(entropy_masked, axis=-1))
         tf.summary.scalar('policy_entropy', entropy, family='entropy')
-        tf.summary.scalar('policy_entropy_masked', entropy_masked, family='entropy')
         tf.summary.scalar('entropy_loss', entropy_loss, family='losses')
 
         return entropy_loss

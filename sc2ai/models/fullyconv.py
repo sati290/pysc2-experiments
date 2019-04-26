@@ -8,10 +8,12 @@ from tensorflow.keras.layers import Concatenate, Flatten, Dense, Conv2D
 from .common import preprocess_spatial_observation
 
 
-def spatial_stream(obs, spec):
+@gin.configurable
+def spatial_stream(obs, spec, conv_filters=(16, 32), conv_kernel_size=(5, 3)):
     x = preprocess_spatial_observation(obs, spec)
     x = Concatenate(1)(x)
-    x = Conv2D(16, 1, activation='linear', data_format='channels_first', kernel_initializer=tf.keras.initializers.Orthogonal())(x)
+    for f, k in zip(conv_filters, conv_kernel_size):
+        x = Conv2D(f, k, padding='same', activation='linear', data_format='channels_first', kernel_initializer=tf.keras.initializers.Orthogonal())(x)
 
     return x
 

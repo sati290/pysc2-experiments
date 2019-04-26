@@ -19,9 +19,10 @@ flags.DEFINE_integer('save_checkpoint_secs', None, '')
 flags.DEFINE_integer('save_checkpoint_steps', None, '')
 flags.DEFINE_integer('step_limit', None, '', lower_bound=0)
 flags.DEFINE_string('run_name', None, '')
+flags.DEFINE_string('run_dir', 'runs', '')
 flags.DEFINE_multi_string('gin_file', None, 'List of paths to the config files.')
 flags.DEFINE_multi_string('gin_param', None, 'Newline separated list of Gin parameter bindings.')
-flags.DEFINE_string('run_dir', 'runs', '')
+flags.DEFINE_string('map', 'MoveToBeacon', '')
 flags.DEFINE_boolean('gpu_memory_allow_growth', False, '')
 flags.DEFINE_float('gpu_memory_fraction', None, '', lower_bound=0, upper_bound=1)
 flags.DEFINE_boolean('profile', False, '')
@@ -32,13 +33,14 @@ flags.DEFINE_alias('s', 'save_checkpoint_secs')
 flags.DEFINE_alias('l', 'step_limit')
 flags.DEFINE_alias('n', 'run_name')
 flags.DEFINE_alias('d', 'run_dir')
+flags.DEFINE_alias('m', 'map')
 
 
 def main(args):
     run_name = FLAGS.run_name or time.strftime('%Y%m%d-%H%M%S', time.localtime())
     output_dir = path.join(FLAGS.run_dir, run_name)
 
-    gin.bind_parameter('SC2EnvironmentConfig.map_name', 'DefeatZerglingsAndBanelings')
+    gin.bind_parameter('SC2EnvironmentConfig.map_name', FLAGS.map)
 
     gin_files = []
     if path.exists(output_dir):

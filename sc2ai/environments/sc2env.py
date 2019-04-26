@@ -18,7 +18,7 @@ ActionSpec = namedtuple('ActionSpec', ['id', 'sizes', 'obs_space', 'args_mask'])
 
 @gin.configurable
 class SC2EnvironmentConfig:
-    def __init__(self, map_name='MoveToBeacon', screen_size=16, minimap_size=16, function_set='minigames', visualize=False):
+    def __init__(self, map_name=gin.REQUIRED, screen_size=16, minimap_size=16, function_set='minigames', visualize=False):
         self.map_name = map_name
         self.screen_size = screen_size
         self.minimap_size = minimap_size

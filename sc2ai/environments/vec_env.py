@@ -2,8 +2,8 @@ from multiprocessing import Process, Pipe
 import numpy as np
 
 
-def _worker(env_fn, pipe):
-    env = env_fn()
+def _worker(env_fn, env_config, pipe):
+    env = env_fn(env_config)
     try:
         while True:
             cmd, data = pipe.recv()
@@ -25,9 +25,9 @@ def _worker(env_fn, pipe):
 
 
 class VecEnv:
-    def __init__(self, env_fn, num_envs=4):
+    def __init__(self, env_fn, env_config, num_envs=4):
         self._pipes, self._worker_pipes = zip(*[Pipe() for _ in range(num_envs)])
-        self._procs = [Process(target=_worker, args=(env_fn, p)) for p in self._worker_pipes]
+        self._procs = [Process(target=_worker, args=(env_fn, env_config, p)) for p in self._worker_pipes]
         for p in self._procs:
             p.daemon = True
             p.start()

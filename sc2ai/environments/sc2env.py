@@ -17,15 +17,23 @@ ActionSpec = namedtuple('ActionSpec', ['id', 'sizes', 'obs_space', 'args_mask'])
 
 
 @gin.configurable
-class SC2Environment:
-    def __init__(self, screen_size=16, minimap_size=16, function_set='minigames', visualize=False):
-        self._env = None
-        self._aif = parse_agent_interface_format(feature_screen=screen_size, feature_minimap=minimap_size)
-        self._visualize = visualize
+class SC2EnvironmentConfig:
+    def __init__(self, map_name='MoveToBeacon', screen_size=16, minimap_size=16, function_set='minigames', visualize=False):
+        self.map_name = map_name
+        self.screen_size = screen_size
+        self.minimap_size = minimap_size
+        self.function_set = function_set
+        self.visualize = visualize
 
-        if function_set == 'all':
+
+class SC2Environment:
+    def __init__(self, config: SC2EnvironmentConfig):
+        self._aif = parse_agent_interface_format(feature_screen=config.screen_size, feature_minimap=config.minimap_size)
+        self._visualize = config.visualize
+
+        if config.function_set == 'all':
             self._func_ids = [f.id for f in FUNCTIONS]
-        elif function_set == 'minigames':
+        elif config.function_set == 'minigames':
             self._func_ids = [0, 1, 2, 3, 4, 6, 7, 12, 13, 42, 44, 50, 91, 183, 234, 309, 331, 332, 333, 334, 451, 452, 490]
         else:
             raise ValueError
@@ -71,7 +79,7 @@ class SC2Environment:
         num_retries = 3
         while True:
             try:
-                self._env = SC2Env(map_name='MoveToBeacon', agent_interface_format=self._aif, players=[
+                self._env = SC2Env(map_name=config.map_name, agent_interface_format=self._aif, players=[
                     Agent(Race.protoss)
                 ], visualize=self._visualize)
 

@@ -9,7 +9,7 @@ import gin.tf
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 
-from .environments import VecEnv, SC2Environment
+from .environments import VecEnv, SC2Environment, SC2EnvironmentConfig
 from .agents import A2CAgent
 from .training import Runner, RewardSummaryHook
 from .utils import print_parameter_summary, LogProgressHook
@@ -38,6 +38,8 @@ def main(args):
     run_name = FLAGS.run_name or time.strftime('%Y%m%d-%H%M%S', time.localtime())
     output_dir = path.join(FLAGS.run_dir, run_name)
 
+    gin.bind_parameter('SC2EnvironmentConfig.map_name', 'DefeatZerglingsAndBanelings')
+
     gin_files = []
     if path.exists(output_dir):
         print('Resuming', output_dir)
@@ -48,9 +50,9 @@ def main(args):
 
     gin.parse_config_files_and_bindings(gin_files, FLAGS.gin_param, finalize_config=True)
 
-    env = VecEnv(SC2Environment)
+    env = VecEnv(SC2Environment, SC2EnvironmentConfig())
     try:
-        agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_output_dir=output_dir))
+        agent = A2CAgent(env.spec, callbacks=RewardSummaryHook(summary_output_dir=output_dir, write_summaries_secs=30))
         runner = Runner(env, agent)
 
         print_parameter_summary()
@@ -71,7 +73,7 @@ def main(args):
         else:
             hooks.append(tf.train.NanTensorHook(agent.loss))
         with tf.train.MonitoredTrainingSession(config=config, hooks=hooks, checkpoint_dir=output_dir,
-                                               save_summaries_secs=60,
+                                               save_summaries_secs=30,
                                                save_checkpoint_secs=FLAGS.save_checkpoint_secs,
                                                save_checkpoint_steps=FLAGS.save_checkpoint_steps) as sess:
             while not sess.should_stop():

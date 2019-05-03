@@ -10,7 +10,7 @@ import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 
 from .environments import VecEnv, SC2Environment, SC2EnvironmentConfig
-from .agents import A2CAgent
+from .agents import A2CAgent, PPOAgent
 from .training import Runner, RewardSummaryHook
 from .utils import print_parameter_summary, LogProgressHook
 

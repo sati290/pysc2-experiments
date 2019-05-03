@@ -1,1 +1,1 @@
-from .actor_critic import A2CAgent
+from .a2c import A2CAgent

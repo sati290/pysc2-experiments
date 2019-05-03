@@ -1,32 +1,30 @@
 import gin.tf
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Input, Lambda
+from tensorflow.keras.layers import Input
 
 from ..models import FullyConvModel
 from .history import History
 
 
 @gin.configurable(blacklist=('callbacks',))
-class A2CAgent:
+class ActorCriticAgent:
     def __init__(
             self,
             env_spec,
             callbacks=None,
             model_class=FullyConvModel,
             optimizer=tf.train.AdamOptimizer,
-            learning_rate=0.0001,
+            learning_rate=0.0005,
             discount=0.99,
             trajectory_length=16,
             batch_size=32,
             max_grads_norm=100,
-            policy_factor=1,
-            entropy_factor=0.0001,
+            entropy_factor=0.0005,
             value_factor=0.5
     ):
         self.callbacks = callbacks
         self.discount = discount
-        self.policy_factor = policy_factor
         self.entropy_factor = entropy_factor
         self.value_factor = value_factor
 
@@ -73,11 +71,14 @@ class A2CAgent:
             discounts = self.discount * (1 - self.history.episode_ends[i])
             returns[i] = self.history.rewards[i] + discounts * next_values
 
-        run_context.run_with_hooks(self.train_op, feed_dict=self.train_feed(self.history.observations, self.history.actions, returns))
+        self.optimize(run_context, returns)
 
         if self.callbacks:
             global_step = run_context.session.run(tf.train.get_global_step())
             self.callbacks.on_update(global_step)
+
+    def optimize(self, run_context, returns):
+        ...
 
     def obs_feed(self, obs):
         return {input_obs: np.array(obs[name], ndmin=input_obs.shape.rank, copy=False) for name, input_obs in self.input_observations.items()}
@@ -97,7 +98,7 @@ class A2CAgent:
         return fd
 
     def build_loss(self):
-        return tf.add_n([self.value_loss(), self.policy_loss(), self.entropy_loss()])
+        ...
 
     def value_loss(self):
         with tf.name_scope('value_loss'):
@@ -106,15 +107,6 @@ class A2CAgent:
         tf.summary.scalar('value_loss', loss, family='losses')
 
         return loss
-
-    def policy_loss(self):
-        with tf.name_scope('policy_loss'):
-            advantage = self.input_returns - self.model.value
-            policy_loss = -tf.reduce_mean(self.model.policy.log_prob * tf.stop_gradient(advantage)) * self.policy_factor
-
-        tf.summary.scalar('policy_loss', policy_loss, family='losses')
-
-        return policy_loss
 
     def entropy_loss(self):
         with tf.name_scope('entropy_loss'):
